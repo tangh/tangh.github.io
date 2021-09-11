@@ -1,0 +1,714 @@
+
+<!DOCTYPE html>
+
+    <html lang="zh-Hant-CN">
+
+    
+<head>
+    <!-- hexo-inject:begin --><!-- hexo-inject:end --><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="generator" content="雨天等放晴">
+    <title>Python 中的多進程、多線程以及發送和響應 HTTP 請求 - 雨天等放晴</title>
+    <meta name="author" content="Tang Huan">
+    
+        <meta name="keywords" content="Python,Multi Processing,Multi Threading,HTTP,Flask">
+    
+    
+        <link rel="icon" href="https://tangh.github.io/assets/images/favicon.png">
+    
+    
+        <link rel="apple-touch-icon" sizes="180x180" href="https://tangh.github.io/assets/images/apple-touch-icon.png">
+    
+    
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg"},"articleBody":"\n\nMulti Processing and Threading進程和線程最主要的區別是，多進程中所有 variables 都被複製一份，而多線程中被所有線程共享。\n多進程模塊 multiprocessing，進程間的數據交互可以使用 Queue，它在多個進程中共享。\n12345678910111213141516from multiprocessing import Process, Queuedef func_write(q):    for data in [\"A\", \"B\"]: q.put(data)def func_read(q):    while True:        data = q.get(True)        print(data)q = Queue()  # can be modify by multi processes, not copypw = Process(target=func_write, args=(q,))pr = Process(target=func_read, args=(q,))pw.start()pr.start()pw.join()  # main process wait for pw finishingpr.terminate()  # kill endless loop process\n\n外部進程模塊 subprocess: status, output = subprocess.getstatusoutput(cmd)。\n多線程模塊 threading，啟動方法與多進程一致。多進程和多線程 class 都有一個 .join() 方法，會使主進程/線程阻塞在 join 這一行；也都有一個 .daemon 屬性，設置為 True 時主進程/線程運行完成時會直接結束並結束掉這個子進程/線程，否則會在運行到最後時等待子進程/線程結束。\n1234567891011121314151617181920212223242526272829303132import os, timeimport threading, multiprocessingdef loop():    print('pid=%d, ppid=%d, thread %s is running...' % (        os.getpid(), os.getppid(), threading.current_thread().name    ))    n = 0    while n &lt; 3:        n = n + 1        print('thread %s &gt;&gt;&gt; %s' % (threading.current_thread().name, n))        time.sleep(2)    print('pid=%d, ppid=%d, thread %s end' % (        os.getpid(), os.getppid(), threading.current_thread().name    ))print('pid=%d, ppid=%d, thread %s is running...' % (    os.getpid(), os.getppid(), threading.current_thread().name))# t = threading.Thread(target=loop, name='LoopThread')# t.daemon = Truet = multiprocessing.Process(target=loop)# t.daemon = Truet.start()# t.join()print('pid=%d, ppid=%d, main thread %s finished.' % (    os.getpid(), os.getppid(), threading.current_thread().name))\n\n使用進程池批量創建進程處理任務並得到返回值。\n1234567891011121314151617from multiprocessing import Poolpool = Pool(N_PROCESSES)data_per_process = len(data) // N_PROCESSES + 1pool_res = []for i in range(0, len(data), data_per_process):    i_data = data[i: i+data_per_process]    res = pool.apply_async(        target_func, args=(i_data,)    )    pool_res.append(res)pool.close()pool.join()for res in res_pool:    res = res.get()\n\n\n\nFlask響應 HTTP 請求，構造返回：  \n\n請求：[GET] URL、地址欄參數 | [POST] 表單、文本、JSON、二進制文件\n返回：文本（HTML）、JSON、base64 二進制\n\n基本的使用方法是創建一個 Flask 對象，然後通過 @app.route() 將函數綁定到 url 上，函數的 return 為 HTML 請求的響應（例如返回一個 HTML 文本，那麼響應的 Header 中 Content-Type: text/html），最後通過 app.run() 啟動。\n請求時的一些參數或 post body 或文件 等等 的內容通過 flask.request 獲取。\n12345678910111213141516171819202122232425from flask import Flask, requestapp = Flask(__name__)# decorator@app.route('/', methods=['GET', 'POST'])def home():    return '&lt;h1&gt;Home&lt;/h1&gt;'@app.route('/signin', methods=['GET'])def signin_form():    # post form when click sign in    return ('&lt;form action=\"/signin\" method=\"post\"&gt;'            '&lt;p&gt;&lt;input name=\"username\"&gt;&lt;/p&gt;'            '&lt;p&gt;&lt;input name=\"password\" type=\"password\"&gt;&lt;/p&gt;'            '&lt;p&gt;&lt;button type=\"submit\"&gt;Sign In&lt;/button&gt;&lt;/p&gt;'            '&lt;/form&gt;')@app.route('/signin', methods=['POST'])def signin():    if request.form['username']=='admin' and request.form['password']=='pwd':        return '&lt;h3&gt;Hello, admin!&lt;/h3&gt;'    return '&lt;h3&gt;Bad username or password.&lt;/h3&gt;'app.run()\n\n上述帳號信息通過 POST 傳輸，地址欄中不會展示傳輸的數據，可以通過 request.form 拿到 body 中的內容（當請求的 Content-Type: application/x-www-form-urlencoded 時）。信息也可以通過 GET 傳輸，GET 請求沒有 body，通過地址傳輸信息，類似 curl &quot;127.0.0.1:5000/api/login?username=admin&amp;password=pwd&quot;，通過 request.args.get() 得到信息。\n除了裝飾器，還可以通過 add_url_rule 將函數與 url 綁定，app.run 時可設置 ip 為 &quot;0.0.0.0&quot; 啟動局域網訪問（http://127.0.0.1:5000/ -&gt; http://10.x.x.x:5000/）。\n12345678910def login():    if (request.args.get('username', type=str) == \"admin\"        and request.args.get('password', type=str) == \"pwd\"):        return '&lt;h3&gt;Hello, admin!&lt;/h3&gt;'    return '&lt;h3&gt;Bad username or password.&lt;/h3&gt;'# bind func using `add_url_rule` instead of decorator# url, endpoint (for url_for(), = None is ok), func, methods=['POST','GET'] default is GET onlyapp.add_url_rule(\"/api/login\", \"login\", login)app.run(\"0.0.0.0\", 5000)\n\nurl 中也可直接設置參數，這些參數則可作為綁定的函數的參數傳入。\n對於信息的返回，除了 HTML 文本外經常還會返回 json，使用 jsonify 返回的 Content-Type 會設置為 application/json，而使用 Python json.dumps 則為 text/html。\n對於信息的讀取，二進制文件，可以 POST Content-Type: multipart/form-data 通過 request.files 得到；json 可以通過 request.get_json 得到。如果 header 中沒有正確設置 Content-Type，可以通過 request.get_data(as_text=True) -&gt; json.loads() 讀取（任何 post str: text/html etc 都可以通過 get_data 獲取 decode(&#39;utf-8&#39;)）。\n1234567891011121314151617181920212223242526272829303132333435363738394041424344454647484950import jsonfrom flask import jsonify, Response# int/string is optional@app.route('/hello/&lt;int:userid&gt;/&lt;string:username&gt;', methods=['GET'])def hello(userid, username):    return_dict = &#123;\"id\": userid, \"name\": username&#125;    # return json.dumps(return_dict)    return jsonify(return_dict)@app.route('/api/json', methods=['POST'])def json2html():    print(\"json api post content type:\", request.content_type)    if request.get_json() is not None:        json_data = request.get_json()        html = \"&lt;p&gt;content type is application/json&lt;/p&gt;\"    else:        html = \"&lt;p&gt;content type is text/html&lt;/p&gt;\"        json_data = json.loads(request.get_data(as_text=True))    for key in json_data:        html += f\"&lt;p&gt;&#123;key&#125;: &#123;json_data[key]&#125;&lt;/p&gt;\"    return htmlimport ioimport base64from PIL import Image@app.route('/api/image_base64', methods=['POST'])def rotate_image():    print(\"image api post content type:\", request.content_type)    data = &#123;\"successed\": False&#125;    if request.method == 'POST' and request.files.get('image'):        image = request.files[\"image\"].read()        image = Image.open(io.BytesIO(image)).convert(\"RGB\")        image = image.rotate(90)        buffer = io.BytesIO()        image.save(buffer, format=\"JPEG\")        result_img_str = base64.b64encode(buffer.getvalue()).decode('ascii')        data[\"base64_image\"] = result_img_str        data[\"successed\"] = True    return jsonify(data)@app.route('/api/image_binary/&lt;string:image_id&gt;', methods=['GET'])def load_image(image_id):    image_dir = \"\"    image = open(image_dir+image_id+\".jpg\", 'rb').read()    return Response(image, status=200, mimetype=\"image/jpeg\")    return image, 200, &#123;'Content-Type': 'image/jpeg'&#125;    # view directly from browserapp.run(\"0.0.0.0\", 5000)\n\n\n\nurllib and requests發送 HTTP 請求到指定的頁面，構造請求的內容，解析返回。\nurllib\n使用 urllib.request.urlopen(url) 可直接發送一個 GET 請求到指定 url。返回無論是 文本、HTML、JSON、base64 都作為文本讀入。\n12345678910111213141516from urllib import requestwith request.urlopen('http://127.0.0.1:5000/') as f:    data = f.read()    # data = json.loads(data)  # if response is json data    print('Status:', f.status, f.reason)  # f.getcode()=f.status    for k, v in f.getheaders():        print('%s: %s' % (k, v))    print('Data:', data.decode('utf-8'))# Status: 200 OK# Content-Type: text/html; charset=utf-8# Content-Length: 13# Server: Werkzeug/2.0.0 Python/3.7.9# Date: Mon, 15 Feb 2021 06:00:00 GMT# Data: &lt;h1&gt;Home&lt;/h1&gt;\n\n請求中需要包含 HTTP Header 就需要先構造一個 Request。\n123req = request.Request('http://www.douban.com/')  # method='GET'req.add_header('User-Agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1 Mobile/15E148 Safari/604.1')request.urlopen(req)\n\nPOST 請求需要用到 urlopen 的 data= 參數。默認 Content-Type: application/x-www-form-urlencoded (form)。另一種格式是 json，需要先構造一個 Request（需要 header）。含有 data 默認 method 為 POST？\n12345678910111213141516171819202122232425262728from urllib import request, parse# post formlogin_data = parse.urlencode([    ('username', 'admin'),    ('password', 'pwd'),])  # username=admin&amp;password=password  formwith request.urlopen('http://127.0.0.1:5000/signin', data=login_data.encode('utf-8')) as f:    data = f.read()    print('Status:', f.status, f.reason)    for k, v in f.getheaders():        print('%s: %s' % (k, v))    print('Data:', data.decode('utf-8'))# post jsonimport jsonlogin_data = json.dumps(&#123;    'username': 'admin',    'password': 'pwd',&#125;, ensure_ascii=False)login_data = bytes(login_data, 'utf-8')  # login_data.encode('utf-8')headers = &#123;'Content-Type':'application/json'&#125;req = request.Request(\"http://127.0.0.1:5000/api/json\",                      headers=headers, data=login_data, method='POST')with request.urlopen(req) as f:    data = f.read()    print('Data:', data.decode('utf-8'))\n\n\nrequests\n123456789101112131415161718192021222324252627282930313233343536373839import requests# get with headersr = requests.get(    'https://www.douban.com/',    headers=&#123;'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1 Mobile/15E148 Safari/604.1'&#125;)  # headers 可省略r.status_code, r.headers  # headers of responser.text  # text '&lt;h3&gt;Hello, admin!&lt;/h3&gt;'r.content  # show binary of any pure return b'&lt;h3&gt;Hello, admin!&lt;/h3&gt;'# get binary image with 'Content-Type': 'image/jpeg'r = requests.get(\"https://i0.hdslb.com/bfs/archive/.jpg\")image = Image.open(BytesIO(r.content))# get with url paramsr = requests.get('http://127.0.0.1:5000/api/login', params=&#123;'username': 'admin', 'password': 'pwd'&#125;)r.url  # 'http://127.0.0.1:5000/api/login?username=admin&amp;password=pwd'# get json objectr = requests.get('https://query.yahooapis.com/v1/public/yql?q=select%20*%20from%20weather.forecast%20where%20woeid%20%3D%202151330&amp;format=json')r = requests.get('http://127.0.0.1:5000/hello/39/admin')r.json()  # dict &#123;'id': 39, 'name': 'admin'&#125;, = json.loads(r.content.decode(\"utf-8\"))# post form (application/x-www-form-urlencoded)r = requests.post('http://127.0.0.1:5000/signin', data=&#123;'username': 'admin', 'password': 'pwd'&#125;)# post jsonlogin_data = &#123;'username': 'admin', 'password': 'pwd'&#125;r1 = requests.post('http://127.0.0.1:5000/api/json', data=json.dumps(login_data), headers=&#123;'Content-Type': 'application/json; charset=utf-8'&#125;)r2 = requests.post('http://127.0.0.1:5000/api/json', json=login_data)# post binary file (multipart/form-data)image = open(image_path, 'rb').read()payload = &#123;'image': image&#125;r = requests.post('http://127.0.0.1:5000/api/image_base64', files=payload).json()rotated_image = base64.b64decode(r['base64_image'])Image.open(io.BytesIO(rotated_image))\n\n\ncurl\nhttp://www.ruanyifeng.com/blog/2019/09/curl-reference.html\nHTTP API一個 Data Class 來定時拉取、處理、更新數據，將結果調用 HTTP Class 的更新函數保存到其 .data 中。HTTP Class 更新和返回數據的方法需要有線程鎖，保證這兩個函數在兩個 Class（處於兩個線程）中不會同時調用（改變和獲取數據不同時發生）。由於兩個 Class 都需要 serve forever，且更新的頻率會遠低於查詢的，為了不互相阻塞需要在兩個線程中。\n1234567891011121314151617181920212223242526272829303132333435363738394041424344454647484950515253545556575859606162636465666768697071727374757677787980818283import timeimport datetimeimport threadingfrom flask import Flask, request, jsonifyclass RunSearch:    def __init__(self):        self.app = Flask(__name__)        self.data = None        # same lock can only be acquire once before release        self.mutex = threading.Lock()        self.app.config['JSON_AS_ASCII'] = False  # jsonify allow none-ascii        self.app.add_url_rule('/api/search', 'search', self.http_server)        def http_server(self):        try:            query_key = request.args.get(\"key\", type=str)            ret, result = self.get_data(query_key)            result = &#123;\"code\": ret, \"result\": result&#125;        except Exception as e:            print(e)            result = &#123;\"code\": -1, \"result\": []&#125;        return jsonify(result)    def get_data(self, query_key):        # prohibit data update while get        try:            self.mutex.acquire()            if not isinstance(self.data, dict):                return -1, []            elif query_key not in self.data:                return -2, []            return 0, self.data[query_key]        except Exception as e:            print(e)            return -1, []        finally:            self.mutex.release()    def update_data(self, new_data):        try:            self.mutex.acquire()            self.data = new_data            print(\"data update successful\")        except Exception as e:            print(e)        finally:            self.mutex.release()        # simple code without except        # with self.mutex:        #     self.data = new_data        #     print(\"data update successful\")class Data(threading.Thread):    # hold instance of http server    def __init__(self, http_server):        super().__init__()  # threading.Thread.__init__(self)        self.http_server = http_server        self.last_update_logdate = None        # self.daemon = True    def run(self):        while True:            logdate = datetime.datetime.now() + datetime.timedelta(days=-1)            if logdate.strftime(\"%Y%m%d\") == self.last_update_logdate:                print(\"already have latest data\")                time.sleep(10)                continue            new_data = self.generate_new_data(logdate)            self.http_server.update_data(new_data)            self.last_update_logdate = logdate.strftime(\"%Y%m%d\")            time.sleep(10)    def generate_new_data(self, logdate):        return &#123;\"example\": logdate&#125;http_server = RunSearch()data = Data(http_server)data.start()  # won't stop here by while loop, this thread won't stophttp_server.app.run(\"0.0.0.0\", 5000)  # Running on http://114.224.62.114:5000/# ctrl+c to stop Flask, main thread end -&gt; daemon child thread end# daemon=False ctrl+c twice\n\n12345678910111213141516171819202122232425262728293031323334import time, threadingfrom flask import Flask, requestclass Executor:    def __init__(self):        self.shutdown = False    def serve_forever(self):        while not self.shutdown:            print(\"running\")            time.sleep(10)        print(\"end\")class ExecutorHttpThread(threading.Thread):    def __init__(self, executor):        super().__init__()        self.executor = executor        self.daemon = True  # main thread won't waiting for http thread when ending        self.app = Flask(\"ExecutorHttp\")        self.app.add_url_rule('/shutdown', None, self.shutdown)    def shutdown(self):        shutdown = request.environ.get('werkzeug.server.shutdown')        self.executor.shutdown = True  # shutdown executor        if shutdown is not None: shutdown()  # shutdown http immediately        return \"server shutdown\"        def run(self):        self.app.run()executor = Executor()http = ExecutorHttpThread(executor)http.start()  # -&gt; call run()executor.serve_forever()","dateCreated":"2021-02-15T00:00:00+08:00","dateModified":"2021-09-11T17:40:22+08:00","datePublished":"2021-02-15T00:00:00+08:00","description":"Python 中的多進程、多線程以及發送和響應 HTTP 請求。","headline":"Python 中的多進程、多線程以及發送和響應 HTTP 請求","image":[],"mainEntityOfPage":{"@type":"WebPage","@id":"https://tangh.github.io/articles/python-processes-threads-and-http/"},"publisher":{"@type":"Organization","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg","logo":{"@type":"ImageObject","url":"icon.jpg"}},"url":"https://tangh.github.io/articles/python-processes-threads-and-http/","keywords":"Python, Computer Vision, Flask"}</script>
+    <meta name="description" content="Python 中的多進程、多線程以及發送和響應 HTTP 請求。">
+<meta property="og:type" content="blog">
+<meta property="og:title" content="Python 中的多進程、多線程以及發送和響應 HTTP 請求">
+<meta property="og:url" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;articles&#x2F;python-processes-threads-and-http&#x2F;">
+<meta property="og:site_name" content="雨天等放晴">
+<meta property="og:description" content="Python 中的多進程、多線程以及發送和響應 HTTP 請求。">
+<meta property="og:locale" content="en_US">
+<meta property="article:published_time" content="2021-02-14T16:00:00.000Z">
+<meta property="article:modified_time" content="2021-09-11T09:40:22.330Z">
+<meta property="article:author" content="Tang Huan">
+<meta property="article:tag" content="Python">
+<meta property="article:tag" content="Multi Processing">
+<meta property="article:tag" content="Multi Threading">
+<meta property="article:tag" content="HTTP">
+<meta property="article:tag" content="Flask">
+<meta name="twitter:card" content="summary">
+    
+    
+        
+    
+    
+        <meta property="og:image" content="https://tangh.github.io/assets/images/icon.jpg"/>
+    
+    
+    
+    
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
+    <!--STYLES-->
+    
+<link rel="stylesheet" href="/assets/css/style-iaetwm81hfopcuajcp7qnh2zsnqn4dhiu3nftuj79wdhe7fie6l4r0thrs6g.min.css">
+
+    <!--STYLES END-->
+    
+    <script async src="https://www.googletagmanager.com/gtag/js?id=UA-137837052-1"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'UA-137837052-1');
+    </script><!-- hexo-inject:begin --><!-- hexo-inject:end -->
+
+
+    
+
+</head>
+
+    <body>
+        <!-- hexo-inject:begin --><!-- hexo-inject:end --><div id="blog">
+            <!-- Define author's picture -->
+
+
+    
+        
+            
+        
+    
+
+<header id="header" data-behavior="4">
+    <i id="btn-open-sidebar" class="fa fa-lg fa-bars"></i>
+    <div class="header-title">
+        <a
+            class="header-title-link"
+            href="/"
+            aria-label=""
+        >
+            雨天等放晴
+        </a>
+    </div>
+    
+        
+            <a
+                class="header-right-picture "
+                href="#about"
+                aria-label="Open the link: /#about"
+            >
+        
+        
+            <img class="header-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+        </a>
+    
+</header>
+
+            <!-- Define author's picture -->
+
+
+
+        
+    
+
+<nav id="sidebar" data-behavior="4">
+    <div class="sidebar-container">
+        
+            <div class="sidebar-profile">
+                <a
+                    href="/#about"
+                    aria-label="Read more about the author"
+                >
+                    <img class="sidebar-profile-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+                </a>
+                <h4 class="sidebar-profile-name">Tang Huan</h4>
+                
+                    <h5 class="sidebar-profile-bio"></h5>
+                
+            </div>
+        
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/"
+                            
+                            rel="noopener"
+                            title="Home"
+                        >
+                        <i class="sidebar-button-icon fa fa-home" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Home</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-categories"
+                            
+                            rel="noopener"
+                            title="Categories"
+                        >
+                        <i class="sidebar-button-icon fa fa-bookmark" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Categories</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-tags"
+                            
+                            rel="noopener"
+                            title="Tags"
+                        >
+                        <i class="sidebar-button-icon fa fa-tags" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Tags</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-archives"
+                            
+                            rel="noopener"
+                            title="Archives"
+                        >
+                        <i class="sidebar-button-icon fa fa-archive" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Archives</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/about"
+                            
+                            rel="noopener"
+                            title="About"
+                        >
+                        <i class="sidebar-button-icon fas fa-cube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">About</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://twitter.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Twitter"
+                        >
+                        <i class="sidebar-button-icon fab fa-twitter" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Twitter</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.flickr.com/photos/135277712@N07/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Flickr"
+                        >
+                        <i class="sidebar-button-icon fab fa-flickr" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Flickr</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.instagram.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Instagram"
+                        >
+                        <i class="sidebar-button-icon fab fa-instagram" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Instagram</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="YouTube"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">YouTube</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://space.bilibili.com/634428/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="BiliBili"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube-square" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">BiliBili</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+    </div>
+</nav>
+
+            
+            <div id="main" data-behavior="4"
+                 class="
+                        hasCoverMetaIn
+                        ">
+                
+<article class="post">
+    
+    
+        <div class="post-header main-content-wrap text-center">
+    
+        <h1 class="post-title">
+            Python 中的多進程、多線程以及發送和響應 HTTP 請求
+        </h1>
+    
+    
+        <div class="post-meta">
+    <time datetime="2021-02-15T00:00:00+08:00">
+	
+		    Feb 15, 2021
+    	
+    </time>
+    
+        <span>in </span>
+        
+    <a class="category-link" href="/categories/Computer/">Computer</a>, <a class="category-link" href="/categories/Computer/Programming/">Programming</a>
+
+
+    
+</div>
+
+    
+</div>
+
+    
+    
+        <div class="post-content markdown">
+    
+        <div class="main-content-wrap">
+            <!-- excerpt -->
+
+<h1 id="Multi-Processing-and-Threading"><a href="#Multi-Processing-and-Threading" class="headerlink" title="Multi Processing and Threading"></a>Multi Processing and Threading</h1><p>進程和線程最主要的區別是，多進程中所有 variables 都被複製一份，而多線程中被所有線程共享。</p>
+<p>多進程模塊 <code>multiprocessing</code>，進程間的數據交互可以使用 <code>Queue</code>，它在多個進程中共享。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">from</span> multiprocessing <span class="keyword">import</span> Process, Queue</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">func_write</span><span class="params">(q)</span>:</span></span><br><span class="line">    <span class="keyword">for</span> data <span class="keyword">in</span> [<span class="string">"A"</span>, <span class="string">"B"</span>]: q.put(data)</span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">func_read</span><span class="params">(q)</span>:</span></span><br><span class="line">    <span class="keyword">while</span> <span class="literal">True</span>:</span><br><span class="line">        data = q.get(<span class="literal">True</span>)</span><br><span class="line">        print(data)</span><br><span class="line"></span><br><span class="line">q = Queue()  <span class="comment"># can be modify by multi processes, not copy</span></span><br><span class="line">pw = Process(target=func_write, args=(q,))</span><br><span class="line">pr = Process(target=func_read, args=(q,))</span><br><span class="line">pw.start()</span><br><span class="line">pr.start()</span><br><span class="line">pw.join()  <span class="comment"># main process wait for pw finishing</span></span><br><span class="line">pr.terminate()  <span class="comment"># kill endless loop process</span></span><br></pre></td></tr></table></figure>
+
+<p>外部進程模塊 <code>subprocess</code>: <code>status, output = subprocess.getstatusoutput(cmd)</code>。</p>
+<p>多線程模塊 <code>threading</code>，啟動方法與多進程一致。多進程和多線程 class 都有一個 <code>.join()</code> 方法，會使主進程/線程阻塞在 join 這一行；也都有一個 <code>.daemon</code> 屬性，設置為 <code>True</code> 時主進程/線程運行完成時會直接結束並結束掉這個子進程/線程，否則會在運行到最後時等待子進程/線程結束。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> os, time</span><br><span class="line"><span class="keyword">import</span> threading, multiprocessing</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">loop</span><span class="params">()</span>:</span></span><br><span class="line">    print(<span class="string">'pid=%d, ppid=%d, thread %s is running...'</span> % (</span><br><span class="line">        os.getpid(), os.getppid(), threading.current_thread().name</span><br><span class="line">    ))</span><br><span class="line">    n = <span class="number">0</span></span><br><span class="line">    <span class="keyword">while</span> n &lt; <span class="number">3</span>:</span><br><span class="line">        n = n + <span class="number">1</span></span><br><span class="line">        print(<span class="string">'thread %s &gt;&gt;&gt; %s'</span> % (threading.current_thread().name, n))</span><br><span class="line">        time.sleep(<span class="number">2</span>)</span><br><span class="line">    print(<span class="string">'pid=%d, ppid=%d, thread %s end'</span> % (</span><br><span class="line">        os.getpid(), os.getppid(), threading.current_thread().name</span><br><span class="line">    ))</span><br><span class="line"></span><br><span class="line">print(<span class="string">'pid=%d, ppid=%d, thread %s is running...'</span> % (</span><br><span class="line">    os.getpid(), os.getppid(), threading.current_thread().name</span><br><span class="line">))</span><br><span class="line"></span><br><span class="line"><span class="comment"># t = threading.Thread(target=loop, name='LoopThread')</span></span><br><span class="line"><span class="comment"># t.daemon = True</span></span><br><span class="line"></span><br><span class="line">t = multiprocessing.Process(target=loop)</span><br><span class="line"><span class="comment"># t.daemon = True</span></span><br><span class="line"></span><br><span class="line">t.start()</span><br><span class="line"><span class="comment"># t.join()</span></span><br><span class="line"></span><br><span class="line">print(<span class="string">'pid=%d, ppid=%d, main thread %s finished.'</span> % (</span><br><span class="line">    os.getpid(), os.getppid(), threading.current_thread().name</span><br><span class="line">))</span><br></pre></td></tr></table></figure>
+
+<p>使用進程池批量創建進程處理任務並得到返回值。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">from</span> multiprocessing <span class="keyword">import</span> Pool</span><br><span class="line"></span><br><span class="line">pool = Pool(N_PROCESSES)</span><br><span class="line">data_per_process = len(data) // N_PROCESSES + <span class="number">1</span></span><br><span class="line">pool_res = []</span><br><span class="line"></span><br><span class="line"><span class="keyword">for</span> i <span class="keyword">in</span> range(<span class="number">0</span>, len(data), data_per_process):</span><br><span class="line">    i_data = data[i: i+data_per_process]</span><br><span class="line">    res = pool.apply_async(</span><br><span class="line">        target_func, args=(i_data,)</span><br><span class="line">    )</span><br><span class="line">    pool_res.append(res)</span><br><span class="line">pool.close()</span><br><span class="line">pool.join()</span><br><span class="line"></span><br><span class="line"><span class="keyword">for</span> res <span class="keyword">in</span> res_pool:</span><br><span class="line">    res = res.get()</span><br></pre></td></tr></table></figure>
+
+
+
+<h1 id="Flask"><a href="#Flask" class="headerlink" title="Flask"></a>Flask</h1><p>響應 HTTP 請求，構造返回：  </p>
+<ul>
+<li>請求：[GET] URL、地址欄參數 | [POST] 表單、文本、JSON、二進制文件</li>
+<li>返回：文本（HTML）、JSON、base64 二進制</li>
+</ul>
+<p>基本的使用方法是創建一個 Flask 對象，然後通過 <code>@app.route()</code> 將函數綁定到 url 上，函數的 return 為 HTML 請求的響應（例如返回一個 HTML 文本，那麼響應的 Header 中 <code>Content-Type: text/html</code>），最後通過 <code>app.run()</code> 啟動。</p>
+<p>請求時的一些參數或 post body 或文件 等等 的內容通過 <code>flask.request</code> 獲取。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">from</span> flask <span class="keyword">import</span> Flask, request</span><br><span class="line"></span><br><span class="line">app = Flask(__name__)</span><br><span class="line"></span><br><span class="line"><span class="comment"># decorator</span></span><br><span class="line"><span class="meta">@app.route('/', methods=['GET', 'POST'])</span></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">home</span><span class="params">()</span>:</span></span><br><span class="line">    <span class="keyword">return</span> <span class="string">'&lt;h1&gt;Home&lt;/h1&gt;'</span></span><br><span class="line"></span><br><span class="line"><span class="meta">@app.route('/signin', methods=['GET'])</span></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">signin_form</span><span class="params">()</span>:</span></span><br><span class="line">    <span class="comment"># post form when click sign in</span></span><br><span class="line">    <span class="keyword">return</span> (<span class="string">'&lt;form action="/signin" method="post"&gt;'</span></span><br><span class="line">            <span class="string">'&lt;p&gt;&lt;input name="username"&gt;&lt;/p&gt;'</span></span><br><span class="line">            <span class="string">'&lt;p&gt;&lt;input name="password" type="password"&gt;&lt;/p&gt;'</span></span><br><span class="line">            <span class="string">'&lt;p&gt;&lt;button type="submit"&gt;Sign In&lt;/button&gt;&lt;/p&gt;'</span></span><br><span class="line">            <span class="string">'&lt;/form&gt;'</span>)</span><br><span class="line"></span><br><span class="line"><span class="meta">@app.route('/signin', methods=['POST'])</span></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">signin</span><span class="params">()</span>:</span></span><br><span class="line">    <span class="keyword">if</span> request.form[<span class="string">'username'</span>]==<span class="string">'admin'</span> <span class="keyword">and</span> request.form[<span class="string">'password'</span>]==<span class="string">'pwd'</span>:</span><br><span class="line">        <span class="keyword">return</span> <span class="string">'&lt;h3&gt;Hello, admin!&lt;/h3&gt;'</span></span><br><span class="line">    <span class="keyword">return</span> <span class="string">'&lt;h3&gt;Bad username or password.&lt;/h3&gt;'</span></span><br><span class="line"></span><br><span class="line">app.run()</span><br></pre></td></tr></table></figure>
+
+<p>上述帳號信息通過 POST 傳輸，地址欄中不會展示傳輸的數據，可以通過 <code>request.form</code> 拿到 body 中的內容（當請求的 <code>Content-Type: application/x-www-form-urlencoded</code> 時）。信息也可以通過 GET 傳輸，GET 請求沒有 body，通過地址傳輸信息，類似 <code>curl &quot;127.0.0.1:5000/api/login?username=admin&amp;password=pwd&quot;</code>，通過 <code>request.args.get()</code> 得到信息。</p>
+<p>除了裝飾器，還可以通過 <code>add_url_rule</code> 將函數與 url 綁定，<code>app.run</code> 時可設置 ip 為 <code>&quot;0.0.0.0&quot;</code> 啟動局域網訪問（<code>http://127.0.0.1:5000/</code> -&gt; <code>http://10.x.x.x:5000/</code>）。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">login</span><span class="params">()</span>:</span></span><br><span class="line">    <span class="keyword">if</span> (request.args.get(<span class="string">'username'</span>, type=str) == <span class="string">"admin"</span></span><br><span class="line">        <span class="keyword">and</span> request.args.get(<span class="string">'password'</span>, type=str) == <span class="string">"pwd"</span>):</span><br><span class="line">        <span class="keyword">return</span> <span class="string">'&lt;h3&gt;Hello, admin!&lt;/h3&gt;'</span></span><br><span class="line">    <span class="keyword">return</span> <span class="string">'&lt;h3&gt;Bad username or password.&lt;/h3&gt;'</span></span><br><span class="line"><span class="comment"># bind func using `add_url_rule` instead of decorator</span></span><br><span class="line"><span class="comment"># url, endpoint (for url_for(), = None is ok), func, methods=['POST','GET'] default is GET only</span></span><br><span class="line">app.add_url_rule(<span class="string">"/api/login"</span>, <span class="string">"login"</span>, login)</span><br><span class="line"></span><br><span class="line">app.run(<span class="string">"0.0.0.0"</span>, <span class="number">5000</span>)</span><br></pre></td></tr></table></figure>
+
+<p>url 中也可直接設置參數，這些參數則可作為綁定的函數的參數傳入。</p>
+<p>對於信息的返回，除了 HTML 文本外經常還會返回 json，使用 <code>jsonify</code> 返回的 <code>Content-Type</code> 會設置為 <code>application/json</code>，而使用 Python <code>json.dumps</code> 則為 <code>text/html</code>。</p>
+<p>對於信息的讀取，二進制文件，可以 POST <code>Content-Type: multipart/form-data</code> 通過 <code>request.files</code> 得到；json 可以通過 <code>request.get_json</code> 得到。如果 header 中沒有正確設置 <code>Content-Type</code>，可以通過 <code>request.get_data(as_text=True) -&gt; json.loads()</code> 讀取（任何 post str: text/html etc 都可以通過 <code>get_data</code> 獲取 <code>decode(&#39;utf-8&#39;)</code>）。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> json</span><br><span class="line"><span class="keyword">from</span> flask <span class="keyword">import</span> jsonify, Response</span><br><span class="line"><span class="comment"># int/string is optional</span></span><br><span class="line"><span class="meta">@app.route('/hello/&lt;int:userid&gt;/&lt;string:username&gt;', methods=['GET'])</span></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">hello</span><span class="params">(userid, username)</span>:</span></span><br><span class="line">    return_dict = &#123;<span class="string">"id"</span>: userid, <span class="string">"name"</span>: username&#125;</span><br><span class="line">    <span class="comment"># return json.dumps(return_dict)</span></span><br><span class="line">    <span class="keyword">return</span> jsonify(return_dict)</span><br><span class="line"></span><br><span class="line"><span class="meta">@app.route('/api/json', methods=['POST'])</span></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">json2html</span><span class="params">()</span>:</span></span><br><span class="line">    print(<span class="string">"json api post content type:"</span>, request.content_type)</span><br><span class="line">    <span class="keyword">if</span> request.get_json() <span class="keyword">is</span> <span class="keyword">not</span> <span class="literal">None</span>:</span><br><span class="line">        json_data = request.get_json()</span><br><span class="line">        html = <span class="string">"&lt;p&gt;content type is application/json&lt;/p&gt;"</span></span><br><span class="line">    <span class="keyword">else</span>:</span><br><span class="line">        html = <span class="string">"&lt;p&gt;content type is text/html&lt;/p&gt;"</span></span><br><span class="line">        json_data = json.loads(request.get_data(as_text=<span class="literal">True</span>))</span><br><span class="line">    <span class="keyword">for</span> key <span class="keyword">in</span> json_data:</span><br><span class="line">        html += <span class="string">f"&lt;p&gt;<span class="subst">&#123;key&#125;</span>: <span class="subst">&#123;json_data[key]&#125;</span>&lt;/p&gt;"</span></span><br><span class="line">    <span class="keyword">return</span> html</span><br><span class="line"></span><br><span class="line"><span class="keyword">import</span> io</span><br><span class="line"><span class="keyword">import</span> base64</span><br><span class="line"><span class="keyword">from</span> PIL <span class="keyword">import</span> Image</span><br><span class="line"><span class="meta">@app.route('/api/image_base64', methods=['POST'])</span></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">rotate_image</span><span class="params">()</span>:</span></span><br><span class="line">    print(<span class="string">"image api post content type:"</span>, request.content_type)</span><br><span class="line">    data = &#123;<span class="string">"successed"</span>: <span class="literal">False</span>&#125;</span><br><span class="line">    <span class="keyword">if</span> request.method == <span class="string">'POST'</span> <span class="keyword">and</span> request.files.get(<span class="string">'image'</span>):</span><br><span class="line">        image = request.files[<span class="string">"image"</span>].read()</span><br><span class="line">        image = Image.open(io.BytesIO(image)).convert(<span class="string">"RGB"</span>)</span><br><span class="line">        image = image.rotate(<span class="number">90</span>)</span><br><span class="line"></span><br><span class="line">        buffer = io.BytesIO()</span><br><span class="line">        image.save(buffer, format=<span class="string">"JPEG"</span>)</span><br><span class="line">        result_img_str = base64.b64encode(buffer.getvalue()).decode(<span class="string">'ascii'</span>)</span><br><span class="line">        data[<span class="string">"base64_image"</span>] = result_img_str</span><br><span class="line">        data[<span class="string">"successed"</span>] = <span class="literal">True</span></span><br><span class="line">    <span class="keyword">return</span> jsonify(data)</span><br><span class="line"></span><br><span class="line"><span class="meta">@app.route('/api/image_binary/&lt;string:image_id&gt;', methods=['GET'])</span></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">load_image</span><span class="params">(image_id)</span>:</span></span><br><span class="line">    image_dir = <span class="string">""</span></span><br><span class="line">    image = open(image_dir+image_id+<span class="string">".jpg"</span>, <span class="string">'rb'</span>).read()</span><br><span class="line">    <span class="keyword">return</span> Response(image, status=<span class="number">200</span>, mimetype=<span class="string">"image/jpeg"</span>)</span><br><span class="line">    <span class="keyword">return</span> image, <span class="number">200</span>, &#123;<span class="string">'Content-Type'</span>: <span class="string">'image/jpeg'</span>&#125;</span><br><span class="line">    <span class="comment"># view directly from browser</span></span><br><span class="line"></span><br><span class="line">app.run(<span class="string">"0.0.0.0"</span>, <span class="number">5000</span>)</span><br></pre></td></tr></table></figure>
+
+
+
+<h1 id="urllib-and-requests"><a href="#urllib-and-requests" class="headerlink" title="urllib and requests"></a>urllib and requests</h1><p>發送 HTTP 請求到指定的頁面，構造請求的內容，解析返回。</p>
+<p><strong>urllib</strong></p>
+<p>使用 <code>urllib.request.urlopen(url)</code> 可直接發送一個 GET 請求到指定 url。返回無論是 文本、HTML、JSON、base64 都作為文本讀入。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">from</span> urllib <span class="keyword">import</span> request</span><br><span class="line"></span><br><span class="line"><span class="keyword">with</span> request.urlopen(<span class="string">'http://127.0.0.1:5000/'</span>) <span class="keyword">as</span> f:</span><br><span class="line">    data = f.read()</span><br><span class="line">    <span class="comment"># data = json.loads(data)  # if response is json data</span></span><br><span class="line">    print(<span class="string">'Status:'</span>, f.status, f.reason)  <span class="comment"># f.getcode()=f.status</span></span><br><span class="line">    <span class="keyword">for</span> k, v <span class="keyword">in</span> f.getheaders():</span><br><span class="line">        print(<span class="string">'%s: %s'</span> % (k, v))</span><br><span class="line">    print(<span class="string">'Data:'</span>, data.decode(<span class="string">'utf-8'</span>))</span><br><span class="line"></span><br><span class="line"><span class="comment"># Status: 200 OK</span></span><br><span class="line"><span class="comment"># Content-Type: text/html; charset=utf-8</span></span><br><span class="line"><span class="comment"># Content-Length: 13</span></span><br><span class="line"><span class="comment"># Server: Werkzeug/2.0.0 Python/3.7.9</span></span><br><span class="line"><span class="comment"># Date: Mon, 15 Feb 2021 06:00:00 GMT</span></span><br><span class="line"><span class="comment"># Data: &lt;h1&gt;Home&lt;/h1&gt;</span></span><br></pre></td></tr></table></figure>
+
+<p>請求中需要包含 HTTP Header 就需要先構造一個 Request。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">req = request.Request(<span class="string">'http://www.douban.com/'</span>)  <span class="comment"># method='GET'</span></span><br><span class="line">req.add_header(<span class="string">'User-Agent'</span>, <span class="string">'Mozilla/5.0 (iPhone; CPU iPhone OS 14_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1 Mobile/15E148 Safari/604.1'</span>)</span><br><span class="line">request.urlopen(req)</span><br></pre></td></tr></table></figure>
+
+<p>POST 請求需要用到 <code>urlopen</code> 的 <code>data=</code> 參數。默認 <code>Content-Type: application/x-www-form-urlencoded (form)</code>。另一種格式是 json，需要先構造一個 <code>Request</code>（需要 header）。含有 data 默認 method 為 POST？</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">from</span> urllib <span class="keyword">import</span> request, parse</span><br><span class="line"></span><br><span class="line"><span class="comment"># post form</span></span><br><span class="line">login_data = parse.urlencode([</span><br><span class="line">    (<span class="string">'username'</span>, <span class="string">'admin'</span>),</span><br><span class="line">    (<span class="string">'password'</span>, <span class="string">'pwd'</span>),</span><br><span class="line">])  <span class="comment"># username=admin&amp;password=password  form</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">with</span> request.urlopen(<span class="string">'http://127.0.0.1:5000/signin'</span>, data=login_data.encode(<span class="string">'utf-8'</span>)) <span class="keyword">as</span> f:</span><br><span class="line">    data = f.read()</span><br><span class="line">    print(<span class="string">'Status:'</span>, f.status, f.reason)</span><br><span class="line">    <span class="keyword">for</span> k, v <span class="keyword">in</span> f.getheaders():</span><br><span class="line">        print(<span class="string">'%s: %s'</span> % (k, v))</span><br><span class="line">    print(<span class="string">'Data:'</span>, data.decode(<span class="string">'utf-8'</span>))</span><br><span class="line"></span><br><span class="line"><span class="comment"># post json</span></span><br><span class="line"><span class="keyword">import</span> json</span><br><span class="line">login_data = json.dumps(&#123;</span><br><span class="line">    <span class="string">'username'</span>: <span class="string">'admin'</span>,</span><br><span class="line">    <span class="string">'password'</span>: <span class="string">'pwd'</span>,</span><br><span class="line">&#125;, ensure_ascii=<span class="literal">False</span>)</span><br><span class="line">login_data = bytes(login_data, <span class="string">'utf-8'</span>)  <span class="comment"># login_data.encode('utf-8')</span></span><br><span class="line">headers = &#123;<span class="string">'Content-Type'</span>:<span class="string">'application/json'</span>&#125;</span><br><span class="line">req = request.Request(<span class="string">"http://127.0.0.1:5000/api/json"</span>,</span><br><span class="line">                      headers=headers, data=login_data, method=<span class="string">'POST'</span>)</span><br><span class="line"><span class="keyword">with</span> request.urlopen(req) <span class="keyword">as</span> f:</span><br><span class="line">    data = f.read()</span><br><span class="line">    print(<span class="string">'Data:'</span>, data.decode(<span class="string">'utf-8'</span>))</span><br></pre></td></tr></table></figure>
+
+
+<p><strong>requests</strong></p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> requests</span><br><span class="line"></span><br><span class="line"><span class="comment"># get with headers</span></span><br><span class="line">r = requests.get(</span><br><span class="line">    <span class="string">'https://www.douban.com/'</span>,</span><br><span class="line">    headers=&#123;<span class="string">'User-Agent'</span>: <span class="string">'Mozilla/5.0 (iPhone; CPU iPhone OS 14_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1 Mobile/15E148 Safari/604.1'</span>&#125;</span><br><span class="line">)  <span class="comment"># headers 可省略</span></span><br><span class="line">r.status_code, r.headers  <span class="comment"># headers of response</span></span><br><span class="line">r.text  <span class="comment"># text '&lt;h3&gt;Hello, admin!&lt;/h3&gt;'</span></span><br><span class="line">r.content  <span class="comment"># show binary of any pure return b'&lt;h3&gt;Hello, admin!&lt;/h3&gt;'</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># get binary image with 'Content-Type': 'image/jpeg'</span></span><br><span class="line">r = requests.get(<span class="string">"https://i0.hdslb.com/bfs/archive/.jpg"</span>)</span><br><span class="line">image = Image.open(BytesIO(r.content))</span><br><span class="line"></span><br><span class="line"><span class="comment"># get with url params</span></span><br><span class="line">r = requests.get(<span class="string">'http://127.0.0.1:5000/api/login'</span>, params=&#123;<span class="string">'username'</span>: <span class="string">'admin'</span>, <span class="string">'password'</span>: <span class="string">'pwd'</span>&#125;)</span><br><span class="line">r.url  <span class="comment"># 'http://127.0.0.1:5000/api/login?username=admin&amp;password=pwd'</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># get json object</span></span><br><span class="line">r = requests.get(<span class="string">'https://query.yahooapis.com/v1/public/yql?q=select%20*%20from%20weather.forecast%20where%20woeid%20%3D%202151330&amp;format=json'</span>)</span><br><span class="line">r = requests.get(<span class="string">'http://127.0.0.1:5000/hello/39/admin'</span>)</span><br><span class="line">r.json()  <span class="comment"># dict &#123;'id': 39, 'name': 'admin'&#125;, = json.loads(r.content.decode("utf-8"))</span></span><br><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="comment"># post form (application/x-www-form-urlencoded)</span></span><br><span class="line">r = requests.post(<span class="string">'http://127.0.0.1:5000/signin'</span>, data=&#123;<span class="string">'username'</span>: <span class="string">'admin'</span>, <span class="string">'password'</span>: <span class="string">'pwd'</span>&#125;)</span><br><span class="line"></span><br><span class="line"><span class="comment"># post json</span></span><br><span class="line">login_data = &#123;<span class="string">'username'</span>: <span class="string">'admin'</span>, <span class="string">'password'</span>: <span class="string">'pwd'</span>&#125;</span><br><span class="line">r1 = requests.post(<span class="string">'http://127.0.0.1:5000/api/json'</span>, data=json.dumps(login_data), headers=&#123;<span class="string">'Content-Type'</span>: <span class="string">'application/json; charset=utf-8'</span>&#125;)</span><br><span class="line">r2 = requests.post(<span class="string">'http://127.0.0.1:5000/api/json'</span>, json=login_data)</span><br><span class="line"></span><br><span class="line"><span class="comment"># post binary file (multipart/form-data)</span></span><br><span class="line">image = open(image_path, <span class="string">'rb'</span>).read()</span><br><span class="line">payload = &#123;<span class="string">'image'</span>: image&#125;</span><br><span class="line">r = requests.post(<span class="string">'http://127.0.0.1:5000/api/image_base64'</span>, files=payload).json()</span><br><span class="line">rotated_image = base64.b64decode(r[<span class="string">'base64_image'</span>])</span><br><span class="line">Image.open(io.BytesIO(rotated_image))</span><br></pre></td></tr></table></figure>
+
+
+<p><strong>curl</strong></p>
+<p><a href="http://www.ruanyifeng.com/blog/2019/09/curl-reference.html" target="_blank" rel="noopener">http://www.ruanyifeng.com/blog/2019/09/curl-reference.html</a></p>
+<h1 id="HTTP-API"><a href="#HTTP-API" class="headerlink" title="HTTP API"></a>HTTP API</h1><p>一個 Data Class 來定時拉取、處理、更新數據，將結果調用 HTTP Class 的更新函數保存到其 <code>.data</code> 中。HTTP Class 更新和返回數據的方法需要有線程鎖，保證這兩個函數在兩個 Class（處於兩個線程）中不會同時調用（改變和獲取數據不同時發生）。由於兩個 Class 都需要 serve forever，且更新的頻率會遠低於查詢的，為了不互相阻塞需要在兩個線程中。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> time</span><br><span class="line"><span class="keyword">import</span> datetime</span><br><span class="line"><span class="keyword">import</span> threading</span><br><span class="line"><span class="keyword">from</span> flask <span class="keyword">import</span> Flask, request, jsonify</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">RunSearch</span>:</span></span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">__init__</span><span class="params">(self)</span>:</span></span><br><span class="line">        self.app = Flask(__name__)</span><br><span class="line">        self.data = <span class="literal">None</span></span><br><span class="line">        <span class="comment"># same lock can only be acquire once before release</span></span><br><span class="line">        self.mutex = threading.Lock()</span><br><span class="line">        self.app.config[<span class="string">'JSON_AS_ASCII'</span>] = <span class="literal">False</span>  <span class="comment"># jsonify allow none-ascii</span></span><br><span class="line">        self.app.add_url_rule(<span class="string">'/api/search'</span>, <span class="string">'search'</span>, self.http_server)</span><br><span class="line">    </span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">http_server</span><span class="params">(self)</span>:</span></span><br><span class="line">        <span class="keyword">try</span>:</span><br><span class="line">            query_key = request.args.get(<span class="string">"key"</span>, type=str)</span><br><span class="line">            ret, result = self.get_data(query_key)</span><br><span class="line">            result = &#123;<span class="string">"code"</span>: ret, <span class="string">"result"</span>: result&#125;</span><br><span class="line">        <span class="keyword">except</span> Exception <span class="keyword">as</span> e:</span><br><span class="line">            print(e)</span><br><span class="line">            result = &#123;<span class="string">"code"</span>: <span class="number">-1</span>, <span class="string">"result"</span>: []&#125;</span><br><span class="line">        <span class="keyword">return</span> jsonify(result)</span><br><span class="line"></span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">get_data</span><span class="params">(self, query_key)</span>:</span></span><br><span class="line">        <span class="comment"># prohibit data update while get</span></span><br><span class="line">        <span class="keyword">try</span>:</span><br><span class="line">            self.mutex.acquire()</span><br><span class="line">            <span class="keyword">if</span> <span class="keyword">not</span> isinstance(self.data, dict):</span><br><span class="line">                <span class="keyword">return</span> <span class="number">-1</span>, []</span><br><span class="line">            <span class="keyword">elif</span> query_key <span class="keyword">not</span> <span class="keyword">in</span> self.data:</span><br><span class="line">                <span class="keyword">return</span> <span class="number">-2</span>, []</span><br><span class="line">            <span class="keyword">return</span> <span class="number">0</span>, self.data[query_key]</span><br><span class="line">        <span class="keyword">except</span> Exception <span class="keyword">as</span> e:</span><br><span class="line">            print(e)</span><br><span class="line">            <span class="keyword">return</span> <span class="number">-1</span>, []</span><br><span class="line">        <span class="keyword">finally</span>:</span><br><span class="line">            self.mutex.release()</span><br><span class="line"></span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">update_data</span><span class="params">(self, new_data)</span>:</span></span><br><span class="line">        <span class="keyword">try</span>:</span><br><span class="line">            self.mutex.acquire()</span><br><span class="line">            self.data = new_data</span><br><span class="line">            print(<span class="string">"data update successful"</span>)</span><br><span class="line">        <span class="keyword">except</span> Exception <span class="keyword">as</span> e:</span><br><span class="line">            print(e)</span><br><span class="line">        <span class="keyword">finally</span>:</span><br><span class="line">            self.mutex.release()</span><br><span class="line"></span><br><span class="line">        <span class="comment"># simple code without except</span></span><br><span class="line">        <span class="comment"># with self.mutex:</span></span><br><span class="line">        <span class="comment">#     self.data = new_data</span></span><br><span class="line">        <span class="comment">#     print("data update successful")</span></span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Data</span><span class="params">(threading.Thread)</span>:</span></span><br><span class="line">    <span class="comment"># hold instance of http server</span></span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">__init__</span><span class="params">(self, http_server)</span>:</span></span><br><span class="line">        super().__init__()  <span class="comment"># threading.Thread.__init__(self)</span></span><br><span class="line">        self.http_server = http_server</span><br><span class="line">        self.last_update_logdate = <span class="literal">None</span></span><br><span class="line">        <span class="comment"># self.daemon = True</span></span><br><span class="line"></span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">run</span><span class="params">(self)</span>:</span></span><br><span class="line">        <span class="keyword">while</span> <span class="literal">True</span>:</span><br><span class="line">            logdate = datetime.datetime.now() + datetime.timedelta(days=<span class="number">-1</span>)</span><br><span class="line">            <span class="keyword">if</span> logdate.strftime(<span class="string">"%Y%m%d"</span>) == self.last_update_logdate:</span><br><span class="line">                print(<span class="string">"already have latest data"</span>)</span><br><span class="line">                time.sleep(<span class="number">10</span>)</span><br><span class="line">                <span class="keyword">continue</span></span><br><span class="line">            new_data = self.generate_new_data(logdate)</span><br><span class="line">            self.http_server.update_data(new_data)</span><br><span class="line">            self.last_update_logdate = logdate.strftime(<span class="string">"%Y%m%d"</span>)</span><br><span class="line">            time.sleep(<span class="number">10</span>)</span><br><span class="line"></span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">generate_new_data</span><span class="params">(self, logdate)</span>:</span></span><br><span class="line">        <span class="keyword">return</span> &#123;<span class="string">"example"</span>: logdate&#125;</span><br><span class="line"></span><br><span class="line">http_server = RunSearch()</span><br><span class="line">data = Data(http_server)</span><br><span class="line">data.start()  <span class="comment"># won't stop here by while loop, this thread won't stop</span></span><br><span class="line">http_server.app.run(<span class="string">"0.0.0.0"</span>, <span class="number">5000</span>)  <span class="comment"># Running on http://114.224.62.114:5000/</span></span><br><span class="line"><span class="comment"># ctrl+c to stop Flask, main thread end -&gt; daemon child thread end</span></span><br><span class="line"><span class="comment"># daemon=False ctrl+c twice</span></span><br></pre></td></tr></table></figure>
+
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> time, threading</span><br><span class="line"><span class="keyword">from</span> flask <span class="keyword">import</span> Flask, request</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Executor</span>:</span></span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">__init__</span><span class="params">(self)</span>:</span></span><br><span class="line">        self.shutdown = <span class="literal">False</span></span><br><span class="line"></span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">serve_forever</span><span class="params">(self)</span>:</span></span><br><span class="line">        <span class="keyword">while</span> <span class="keyword">not</span> self.shutdown:</span><br><span class="line">            print(<span class="string">"running"</span>)</span><br><span class="line">            time.sleep(<span class="number">10</span>)</span><br><span class="line">        print(<span class="string">"end"</span>)</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">ExecutorHttpThread</span><span class="params">(threading.Thread)</span>:</span></span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">__init__</span><span class="params">(self, executor)</span>:</span></span><br><span class="line">        super().__init__()</span><br><span class="line">        self.executor = executor</span><br><span class="line">        self.daemon = <span class="literal">True</span>  <span class="comment"># main thread won't waiting for http thread when ending</span></span><br><span class="line">        self.app = Flask(<span class="string">"ExecutorHttp"</span>)</span><br><span class="line">        self.app.add_url_rule(<span class="string">'/shutdown'</span>, <span class="literal">None</span>, self.shutdown)</span><br><span class="line"></span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">shutdown</span><span class="params">(self)</span>:</span></span><br><span class="line">        shutdown = request.environ.get(<span class="string">'werkzeug.server.shutdown'</span>)</span><br><span class="line">        self.executor.shutdown = <span class="literal">True</span>  <span class="comment"># shutdown executor</span></span><br><span class="line">        <span class="keyword">if</span> shutdown <span class="keyword">is</span> <span class="keyword">not</span> <span class="literal">None</span>: shutdown()  <span class="comment"># shutdown http immediately</span></span><br><span class="line">        <span class="keyword">return</span> <span class="string">"server shutdown"</span></span><br><span class="line">    </span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">run</span><span class="params">(self)</span>:</span></span><br><span class="line">        self.app.run()</span><br><span class="line"></span><br><span class="line">executor = Executor()</span><br><span class="line">http = ExecutorHttpThread(executor)</span><br><span class="line">http.start()  <span class="comment"># -&gt; call run()</span></span><br><span class="line">executor.serve_forever()</span><br></pre></td></tr></table></figure>
+            
+
+
+        </div>
+    </div>
+    <div id="post-footer" class="post-footer main-content-wrap">
+        
+            <div class="post-footer-tags">
+                <span class="text-color-light text-small">TAGGED IN</span><br/>
+                
+    <a class="tag tag--primary tag--small t-link" href="/tags/Computer-Vision/" rel="tag">Computer Vision</a> <a class="tag tag--primary tag--small t-link" href="/tags/Flask/" rel="tag">Flask</a> <a class="tag tag--primary tag--small t-link" href="/tags/Python/" rel="tag">Python</a>
+
+            </div>
+        
+        
+            <div class="post-actions-wrap">
+    <nav>
+        <ul class="post-actions post-action-nav">
+            <li class="post-action">
+                
+                    <a
+                        class="post-action-btn btn btn--disabled"
+                        aria-hidden="true"
+                    >
+                        
+                        <i class="fa fa-angle-left" aria-hidden="true"></i>
+                        <span class="hide-xs hide-sm text-small icon-ml">PREVIOUS</span>
+                    </a>
+            </li>
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/multi-gpu-and-mix-precision-in-pytorch/"
+                    data-tooltip="PyTorch 中多卡及混合精度使用方法"
+                    aria-label="NEXT: PyTorch 中多卡及混合精度使用方法"
+                >
+                    
+                        <span class="hide-xs hide-sm text-small icon-mr">NEXT</span>
+                        <i class="fa fa-angle-right" aria-hidden="true"></i>
+                    </a>
+            </li>
+        </ul>
+    </nav>
+    <ul class="post-actions post-action-share">
+        <li class="post-action hide-lg hide-md hide-sm">
+            <a
+                class="post-action-btn btn btn--default btn-open-shareoptions"
+                href="#btn-open-shareoptions"
+                aria-label="Share this post"
+            >
+                <i class="fa fa-share-alt" aria-hidden="true"></i>
+            </a>
+        </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/python-processes-threads-and-http/"
+                    title="Share on Facebook"
+                    aria-label="Share on Facebook"
+                >
+                    <i class="fab fa-facebook" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/python-processes-threads-and-http/"
+                    title="Share on Twitter"
+                    aria-label="Share on Twitter"
+                >
+                    <i class="fab fa-twitter" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/python-processes-threads-and-http/"
+                    title="Share on Weibo"
+                    aria-label="Share on Weibo"
+                >
+                    <i class="fab fa-weibo" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/python-processes-threads-and-http/&amp;title=Python 中的多進程、多線程以及發送和響應 HTTP 請求"
+                    title="Share on QQ"
+                    aria-label="Share on QQ"
+                >
+                    <i class="fab fa-qq" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+        
+            
+                <li class="post-action">
+                    <a
+                        class="post-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                        <i class="fa fa-comment"></i>
+                    </a>
+                </li>
+            
+        
+        <li class="post-action">
+            
+                <a class="post-action-btn btn btn--default" href="#" aria-label="Back to top">
+            
+                <i class="fa fa-list" aria-hidden="true"></i>
+            </a>
+        </li>
+    </ul>
+</div>
+
+
+        
+        
+            
+                <div id="gitalk"></div>
+
+            
+        
+    </div>
+</article>
+
+
+
+                <footer id="footer" class="main-content-wrap">
+    <span class="copyrights">
+        Copyrights &copy; 2021 Tang Huan. All Rights Reserved.
+    </span>
+</footer>
+
+            </div>
+            
+                <div id="bottom-bar" class="post-bottom-bar" data-behavior="4">
+                    <div class="post-bar-actions-wrap">
+    <div class="post-actions post-action-share">
+        <div class="post-action">
+            
+                <a class="post-bar-action-btn btn btn--default" href="#" aria-label="Back to top">
+            
+                <i class="fas fa-angle-up" aria-hidden="true"></i>
+            </a>
+        </div>
+        
+            
+                <div class="post-action">
+                    <a 
+                        class="post-bar-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                         <i class="fas fa-angle-down"></i>
+                    </a>
+                </div>
+            
+        
+    </div>
+</div>
+                </div>
+                
+    <div id="share-options-bar" class="share-options-bar" data-behavior="4">
+        <i id="btn-close-shareoptions" class="fa fa-times"></i>
+        <ul class="share-options">
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/python-processes-threads-and-http/"
+                        aria-label="Share on Facebook"
+                    >
+                        <i class="fab fa-facebook" aria-hidden="true"></i><span>Share on Facebook</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/python-processes-threads-and-http/"
+                        aria-label="Share on Twitter"
+                    >
+                        <i class="fab fa-twitter" aria-hidden="true"></i><span>Share on Twitter</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/python-processes-threads-and-http/"
+                        aria-label="Share on Weibo"
+                    >
+                        <i class="fab fa-weibo" aria-hidden="true"></i><span>Share on Weibo</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/python-processes-threads-and-http/&amp;title=Python 中的多進程、多線程以及發送和響應 HTTP 請求"
+                        aria-label="Share on QQ"
+                    >
+                        <i class="fab fa-qq" aria-hidden="true"></i><span>Share on QQ</span>
+                    </a>
+                </li>
+            
+        </ul>
+    </div>
+
+
+            
+        </div>
+        
+
+
+    
+        
+    
+
+<div id="about">
+    <div id="about-card">
+        <div id="about-btn-close">
+            <i class="fa fa-times"></i>
+        </div>
+        
+            <img id="about-card-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+            <h4 id="about-card-name">Tang Huan</h4>
+        
+            <div id="about-card-bio"></div>
+        
+        
+            <div id="about-card-job">
+                <i class="fa fa-briefcase"></i>
+                <br/>
+                
+            </div>
+        
+        
+            <div id="about-card-location">
+                <i class="fa fa-map-marker-alt"></i>
+                <br/>
+                Shanghai
+            </div>
+        
+    </div>
+</div>
+
+        
+        
+<div id="cover" style="background-image:url('/assets/images/cover.jpg');"></div>
+        
+
+<!--SCRIPTS-->
+
+<script src="/assets/js/script-21vlobaq8sfmdbypn0z91hl6jyot6shixuux8ijser2jcbktmikbwlb6yvjx.min.js"></script>
+
+<!--SCRIPTS END-->
+
+
+    
+      <script type="text/javascript">
+        (function() {
+          function render() {
+            new Gitalk({
+              clientID: 'b7b365f41dbbfaaf9b88',
+              clientSecret: '25de272b8030e3c498dd56b883e4386d881b6d62',
+              repo: 'tangh.github.io',
+              owner: 'tangh',
+              admin: ['tangh'],
+              id: 'articles/python-processes-threads-and-http',
+              title: document.title.replace(' - 雨天等放晴', ''),
+              ...{"language":"en","perPage":10,"distractionFreeMode":false,"enableHotKey":true,"pagerDirection":"first","createIssueManually":true}
+            }).render('gitalk');
+          }
+          var gc = document.createElement('script');
+          gc.type = 'text/javascript';
+          gc.src = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js';
+          gc.charset = 'UTF-8';
+          gc.onload = render;
+          gc.async = true;
+          document.querySelector('body').appendChild(gc);
+          var gcs = document.createElement('link');
+          gcs.href = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.css';
+          gcs.type = 'text/css';
+          gcs.rel = 'stylesheet';
+          gcs.media = 'screen,print';
+          document.querySelector('head').appendChild(gcs);
+        })();
+      </script>
+    
+
+
+
+
+    <script>!function(e){var c=Array.prototype.slice.call(document.querySelectorAll("img[data-original]"));function i(){for(var r=0;r<c.length;r++)t=c[r],(n=t.getBoundingClientRect()).top>=-n.height&&0<=n.left&&n.top<=1.5*(e.innerHeight||document.documentElement.clientHeight)&&function(){var t,n,e,i,o=c[r];t=o,n=function(){c=c.filter(function(t){return o!==t})},e=new Image,i=t.getAttribute("data-original"),e.onload=function(){t.src=i,n&&n()},e.src=i}();var t,n}i(),e.addEventListener("scroll",function(){var t,n;t=i,n=e,clearTimeout(t.tId),t.tId=setTimeout(function(){t.call(n)},500)})}(this);</script><!-- hexo-inject:begin --><!-- hexo-inject:end --></body>
+</html>

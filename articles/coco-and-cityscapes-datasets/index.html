@@ -1,0 +1,822 @@
+
+<!DOCTYPE html>
+
+    <html lang="zh-Hans-CN">
+
+    
+<head>
+    <!-- hexo-inject:begin --><!-- hexo-inject:end --><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="generator" content="雨天等放晴">
+    <title>COCO 和 CityScapes 数据集的标注格式和使用 - 雨天等放晴</title>
+    <meta name="author" content="Tang Huan">
+    
+        <meta name="keywords" content="COCO,CityScapes,计算机视觉,深度学习,数据集">
+    
+    
+        <link rel="icon" href="https://tangh.github.io/assets/images/favicon.png">
+    
+    
+        <link rel="apple-touch-icon" sizes="180x180" href="https://tangh.github.io/assets/images/apple-touch-icon.png">
+    
+    
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg"},"articleBody":"\n\n\nCOCO 和 CityScapes 是 Detection 常用的两个数据集，当然由于 Instance Segmentation 和 Detection 任务是相似的，且它们都提供 mask 级的 label，所以也可以使用。目前它们也都提供了 stuff 的 label，所以也可以用于 Semantic Segmentation，以及结合两种 label 之后用于 Panoptic Segmentation。此外它们还可以用于一些其它任务，下面会提到。\n本文主要关注 Detection/Instance Segmentation，对于其它 Segmentation 也会简略概括，其余一些 labels 则直接复制网上现有资料或略过。\n\n\n\n\nCOCO DatasetCOCO 的全称是 Common Objects in COntext，是微软团队提供的一个可以用来进行目标检测、图像分割、关键点检测、图像描述的数据集。COCO 通过在 Flickr 上搜索 80 个对象类别和各种场景类型来收集图像，其使用了亚马逊的 Mechanical Turk (AMT)。\nCOCO 目前有 2014 和 2017 两个版本，图片都是一样的，只是 train/val 的划分不同。COCO 2014 经过实践后，开始将一部分 val 的图片划入 train 中。后来的 2017 中采用了这一划分。如果是 Detection/Instance Segmentation 这两个版本没有太多区别，2014 有现成的新 JSON。2017 后来出了 Semantic Segmentation 和 Panoptic Segmentation 的 label，除了 JSON 还提供一种 PNG 图片格式的，这两个 task 直接用 2017 会方便一些。\n数据集下载：http://cocodataset.org/#download\nCOCO 2014 trainval35k JSON 下载：https://github.com/rbgirshick/py-faster-rcnn/blob/master/data/README.md\n\n\n对于 Detection/Instance Segmentation，COCO_2017_train = COCO_2014_train + valminusminival (:val - minival)，COCO_2017_val = minival。\n在同一个文件夹中解压 zip 文件，得到的文件结构如下：\n\nCOCO 2014\nCOCO 2014\n\nCOCO 2017\nCOCO 2017\n\n\n\n有些解压工具会一次性读取/扫描 zip 里面的所有文件，导致 train 这种超大的 zip 打开就卡住，可以使用以下 Python 脚本解压，只需修改 coco_dataset_path 后运行。且多数解压工具会自动在外面再套上一个文件夹，需要手动调整一下目录结构或者用下面的脚本。\n123456789101112131415161718192021222324import zipfileimport oscoco_dataset_path = '/export/public/MS-COCO-2017'def extract_zipfile(filepath):    print('Extracting &#123;&#125;...'.format(filepath))    global coco_dataset_path    zip_ref = zipfile.ZipFile(filepath, 'r')    zip_ref.extractall(coco_dataset_path)    zip_ref.close()    print('Successfully Extracted &#123;&#125;.'.format(filepath))assert os.path.exists(coco_dataset_path), 'Path not exist.'zipfiles = [os.path.join(coco_dataset_path, file_name)             for file_name in os.listdir(coco_dataset_path)             if os.path.splitext(file_name)[-1] == '.zip']print(\"Zip files will be extrated:\")print('\\n'.join(zipfiles))for file_name in zipfiles: extract_zipfile(file_name)\n\nCOCO 有 Object Detection (Instance Segmentation)、Keypoint Detection、Stuff Segmentation (Semantic Segmentation)、Panoptic Segmentation、Image Captioning 五种标注。\nCOCO 标注格式COCO 官网有 Data Format 的简介，下面逐项详细介绍。\nInstance (Object Detection) 的标注格式以下为 COCO-2017 Val 的 JSON (instance_val2017.json) 部分内容和整体格式\n123456789101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960&#123;\"info\": &#123;\"description\": \"COCO 2017 Dataset\",        \"url\": \"http://cocodataset.org\",        \"version\": \"1.0\",        \"year\": 2017,        \"contributor\": \"COCO Consortium\",        \"date_created\": \"2017/09/01\"        &#125;,\"licenses\": [              &#123;\"url\": \"http://creativecommons.org/licenses/by-nc-sa/2.0/\",              \"id\": 1,              \"name\": \"Attribution-NonCommercial-ShareAlike License\"&#125;,              &#123;\"url\": \"...\",\"id\": 2,\"name\": \"...\"&#125;,            ...],\"images\": [            &#123;\"license\": 4,            \"file_name\": \"000000397133.jpg\",            \"coco_url\": \"http://images.cocodataset.org/val2017/000000397133.jpg\",            \"height\": 427,            \"width\": 640,            \"date_captured\": \"2013-11-14 17:02:52\",            \"flickr_url\": \"http://farm7.staticflickr.com/6116/6255196340_da26cf2c9e_z.jpg\",            \"id\": 397133            &#125;,            &#123;\"license\": 1,            \"file_name\": \"000000037777.jpg\",            \"coco_url\": \"http://images.cocodataset.org/val2017/000000037777.jpg\",            \"height\": 230,            \"width\": 352,            \"date_captured\": \"2013-11-14 20:55:31\",            \"flickr_url\": \"http://farm9.staticflickr.com/8429/7839199426_f6d48aa585_z.jpg\",            \"id\": 37777            &#125;,           ...],\"annotations\": [                 &#123;\"segmentation\": [[510.66,423.01,511.72,420.03,510.45,416.0,510.34,413.02,510.77,410.26,510.77,407.5,510.34,405.16,511.51,402.83,511.41,400.49,510.24,398.16,509.39,397.31,504.61,399.22,502.17,399.64,500.89,401.66,500.47,402.08,499.09,401.87,495.79,401.98,490.59,401.77,488.79,401.77,485.39,398.58,483.9,397.31,481.56,396.35,478.48,395.93,476.68,396.03,475.4,396.77,473.92,398.79,473.28,399.96,473.49,401.87,474.56,403.47,473.07,405.59,473.39,407.71,476.68,409.41,479.23,409.73,481.56,410.69,480.4,411.85,481.35,414.93,479.86,418.65,477.32,420.03,476.04,422.58,479.02,422.58,480.29,423.01,483.79,419.93,486.66,416.21,490.06,415.57,492.18,416.85,491.65,420.24,492.82,422.9,493.56,424.39,496.43,424.6,498.02,423.01,498.13,421.31,497.07,420.03,497.07,415.15,496.33,414.51,501.1,411.96,502.06,411.32,503.02,415.04,503.33,418.12,501.1,420.24,498.98,421.63,500.47,424.39,505.03,423.32,506.2,421.31,507.69,419.5,506.31,423.32,510.03,423.01,510.45,423.01]],                 \"area\": 702.1057499999998,                 \"iscrowd\": 0,                 \"image_id\": 289343,                 \"bbox\": [473.07,395.93,38.65,28.67],                 \"category_id\": 18,                 \"id\": 1768                 &#125;,               ...,                 &#123;\"segmentation\": &#123;\"counts\": [20736,2,453,5,452,9,447,13,444,13,443,15,442,15,442,15,443,15,442,15,443,14,444,13,446,10,448,8,451,4,108769,9,446,12,439,19,1,14,8,11,402,39,3,14,401,57,399,59,398,59,397,60,397,60,397,60,398,59,397,60,397,60,397,59,399,57,400,15,1,9,7,25,401,14,16,26,402,12,15,28,404,9,14,30,406,5,14,31,406,50,405,50,407,44,412,41,7,6,402,40,7,9,401,40,7,10,399,40,7,12,398,39,8,12,397,39,8,13,397,60,397,60,397,61,396,61,397,61,396,62,396,61,397,60,399,4,1,53,405,52,406,51,407,50,408,17,1,30,410,8,2,4,18,14,413,4,32,6,95474,8,5,14,428,11,2,17,425,33,412,1,3,41,410,4,1,43,409,48,408,50,407,51,405,52,405,47,5,1,404,28,4,8,418,25,432,24,434,22,436,12,2,6,439,5,34552],                   \"size\": [457,640]                   &#125;,                 \"area\": 3074,                 \"iscrowd\": 1,                 \"image_id\": 49759,                 \"bbox\": [45,167,519,65],                 \"category_id\": 1,                 \"id\": 900100049759                 &#125;,               ...],\"categories\": [&#123;\"supercategory\": \"person\",\"id\": 1,\"name\": \"person\"&#125;,                ...,               &#123;\"supercategory\": \"indoor\",\"id\": 90,\"name\": \"toothbrush\"&#125;              ]&#125;\n\n\ninfo 是整个数据集的描述信息，之后不会用到。\n\nlicenses 是协议的 id、网址和名称，之后每张图片的信息中都会有一个 licenses id。\n\nimages 中一般需要用到的有四个。file_name：图片在对应 train/val/test 文件夹中的文件名；height/width：图片的宽高；id：图片的唯一 id，在 COCO API 中会用到。\n\nannotations 所有图片上所有物体的标注统一储存在同一个 “annotations” 中，在这里面的每一个标注都含有它对应哪张图片的信息（img_id），和它自己的序号（id）。&quot;iscrowd&quot;: 0 的 annotation 是 Polygons 形式的，表示单个的对象，它的 “segmentation” 是二维 list，这是因为一个物体可能被遮挡部分而分隔开（少数情况），需要多个封闭的曲线才能标注。每个一维 list 里面就是一个封闭图形，值为 xyxyxy… 形式的坐标，即 [510.66,423.01,511.72,420.03,...] 代表图上 (510.66,423.01), (511.72,420.03), ... n 个点。&quot;iscrowd&quot;: 1 的是 RLE（Run-Length Encoding，游程编码） 形式的，标注一组对象（密集，无法很好地分隔成单个的标注）。由 0 开始，交替进行，比如 [20736,2,453, ...] 表示有 20736 个 0，接下来是 2 个 1，接下来是 453 个 0 …，所以这种形式还需要一个 size 信息，最后把这一行 reshape 成这个形状就得到 label。&quot;area&quot; 为 mask 的面积。&quot;bbox&quot; 框的坐标，xywh 格式。都是 0-index 的，横轴为 x/w，像素的中心点为原点，即 bbox = [0, 0, 1, 1] 包围了（左上角）第一个像素。\n\ncategories 一个小类一个 id，被 annotations 中指向。一个大类下包含若干个小类。注意 COCO 总共有 80+1 类 things，而 id 是 1~90，并不是连续的。\n\n\n其中，info、licenses、images 这三个字段的内容在不同的 task 的 JSON 文件中是一样的。不同的是 annotation 和 category。下面的只会介绍这两个字段。\nCOCO Keypoint Detection / Stuff Segmentation / Image Caption 的标注格式Keypoint Detection\nannotations 完全包含上面 Detection 中的内容，并且每个 anno 多出两个字段：&quot;keypoints&quot;: [x1,y1,v1,...], ... 和 &quot;num_keypoints&quot;: &lt;int&gt;, ...。keypoints 是一个长度为 3×k 的数组，其中 k 是这个类中 keypoints 的总数量。每一个 keypoint 是一个长度为 3 的数组。第一和第二个元素分别是 x 和 y 坐标值，第三个元素是个标志位 v，v=0 时表示这个关键点没有标注（这种情况下 x=y=v=0），v=1 时表示这个关键点标注了但是不可见（被遮挡了），v=2 时表示这个关键点标注了同时也可见。num_keypoints 表示这个目标上被标注的关键点的数量（v&gt;0），比较小的目标上无法标注关键点。\ncategories 则只有一类 &quot;supercategory&quot;: &quot;person&quot;，同样包含了 Instance Detection 中的所有内容，并且多出了两个字段：&quot;keypoints&quot;: [str] 和 &quot;skeleton&quot;: [edge]。keypoints 是一个长度为k的数组，包含了每个关键点的名字。skeleton 定义了各个关键点之间的连接性（比如人的左手腕和左肘就是连接的）。\n1234567891011121314151617181920\"annotations\":[&#123;  \"segmentation\": [[125.12,539.69,140.94,522.43...]],  \"num_keypoints\": 10,  \"area\": 47803.27955,  \"iscrowd\": 0,  \"keypoints\": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,142,309,1,177,320,2,191,398...],  \"image_id\": 425226,\"bbox\": [73.35,206.02,300.58,372.5],\"category_id\": 1,  \"id\": 183126&#125;, ...],\"categories\":[&#123;  \"supercategory\": \"person\",  \"id\": 1,  \"name\": \"person\",  \"keypoints\": [\"nose\",\"left_eye\",\"right_eye\",\"left_ear\",\"right_ear\",\"left_shoulder\",\"right_shoulder\",\"left_elbow\",\"right_elbow\",\"left_wrist\",\"right_wrist\",\"left_hip\",\"right_hip\",\"left_knee\",\"right_knee\",\"left_ankle\",\"right_ankle\"],  \"skeleton\": [[16,14],[14,12],[17,15],[15,13],[12,13],[6,12],[7,13],[6,7],[6,8],[7,9],[8,10],[9,11],[2,3],[1,2],[1,3],[2,4],[3,5],[4,6],[5,7]]&#125;]\n\nStuff Segmentation (Semantic Segmentation)\n格式字段与上面 Instance Detection 的完全相同，只是 annotations 中的 iscrowd 没有意义，默认为 0，且每个 segmentation 的值都是 encoded RLE，而不是之前的 polygons/uncompressed RLE（后面有 encoded/uncompressed 的介绍）。categories 的 id 为 92~183，共有 92 类。\n1234567&#123;  \"segmentation\":     &#123;\"counts\": \"omh51Y=0ng31PXL01O10iW10ThN1PPY2\", \"size\": [426, 640]&#125;,     \"area\": 11.0, \"iscrowd\": 0, \"image_id\": 139,     \"bbox\": [444.0, 226.0, 20.0, 11.0],     \"category_id\": 105, \"id\": 20000002&#125;,\n\nImage Caption\n没有 categories 字段。 annotations 多于 images 的个数，一张图片可以有多个描述。且只含三个信息，很简单，如下：\n12345678910annotation&#123;    \"id\": &lt;int&gt;,    \"image_id\": &lt;int&gt;,    \"caption\": &lt;str&gt;&#125;&#123;  \"image_id\": 179765,  \"id\": 38,\"caption\": \"A black Honda motorcycle parked in front of a garage.\"&#125;\n\n\nCOCO Panoptic Segmentaion 的标注格式全景分割的 annotations 与之前的格式不一样，它将一张图片的所有 annos 储存在一个 dict 中，而不像之前一样所有图片所有 annos 平级共同储存。以下是 COCO 2017 的 panoptic_val2017.json。\n123456789101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172&#123;  \"info\": &#123;...&#125;,  \"licenses\": [...],  \"images\": [...],  \"annotations\": [    &#123;      \"segments_info\": [        &#123;          \"id\": 3226956,          \"category_id\": 1,          \"iscrowd\": 0,          \"bbox\": [413,158,53,138],          \"area\": 2840        &#125;,        ...        &#123;          \"id\": 6391959,          \"category_id\": 200,          \"iscrowd\": 0,          \"bbox\": [135,359,336,67],          \"area\": 12618        &#125;      ],      \"file_name\": \"000000000139.png\",      \"image_id\": 139    &#125;,    ...  ],  \"categories\": [    &#123;      \"supercategory\": \"person\",      \"isthing\": 1,      \"id\": 1,      \"name\": \"person\"    &#125;,    ...    &#123;      \"supercategory\": \"indoor\",      \"isthing\": 1,      \"id\": 90,      \"name\": \"toothbrush\"    &#125;,    &#123;      \"supercategory\": \"textile\",      \"isthing\": 0,      \"id\": 92,      \"name\": \"banner\"    &#125;,    ...    &#123;      \"supercategory\": \"window\",      \"isthing\": 0,      \"id\": 181,      \"name\": \"window-other\"    &#125;,    &#123;      \"supercategory\": \"plant\",      \"isthing\": 0,      \"id\": 184,      \"name\": \"tree-merged\"    &#125;,    ...    &#123;      \"supercategory\": \"textile\",      \"isthing\": 0,      \"id\": 200,      \"name\": \"rug-merged\"    &#125;  ]&#125;\n\n因为 Panoptic 是 Non-Overlap 的，所以 segmentation 是用一张 PNG 图片储存：[&quot;annotations&quot;][i][&quot;file_name&quot;]。它是 class-agnostic 的，每个 segment 的 semantic information (class) 储存在 JSON：[&quot;annotations&quot;][i][&quot;segments_info&quot;][j] ([id])。以 RGB24 打开 PNG，如果像素值为 (0,0,0)，则表示 Unlabeled pixels (void)，其余的通过 ids = R + G×256 + B×256^2 即可得到 JSON 中对应的 id 值。i 表示总图片数量，j 表示每张图中标签的数量\n此外，iscrowd 只与 things 有关。thing categories 与 Detection 中的完全相同，stuff categories 与 Semantic Seg 中的有所不同。categories 里面多出的 isthing 用来区分 things 和 stuff。在 panopticapi/panoptic_coco_categories.json 中还会多出一个 color: [int, int, int] 表示这一类的在生成 PNG 时的颜色，对于 things，不同 instance 之间会在这个 base color 上抖动一点，然后通过最终的 RGB 生成 JSON 里的 id。\nCOCO Python API安装 COCO Python API：\n1234567# Officalgit clone https://github.com/cocodataset/cocoapi.gitcd cocoapi/PythonAPIpython setup.py build_ext install# Orpip install pycocotools\n\n所有的 API 可以参考 GitHub/cocoapi-coco.py 和 GitHub/cocoapi-mask.py。这里列出部分 API 使用方式。\n获取 Annotation 信息相关 API首先读取 annotation json 文件：\n12from pycocotools.coco import COCOcoco = COCO(\"path_to_GT_json_file\")\n\n\nimg_ids = coco.getImgIds(imgIds=[], catIds=[]): -&gt; list[int]空参数：返回所有图片的 id：[397133, 37777, 252219, 87038, 174482, 403385, 6818, 480985, 458054, 331352, ...]，在 json 文件的 &quot;images&quot; -&gt; &quot;id&quot; 字段。一个或两个参数传入 int 或 list[int]：返回同时满足所有参数中条件的所有图片（一张图片中可能有多个 Cats）\n\n\nimgs = coco.loadImgs(img_ids) -&gt; list[dict]传入一个图片 id 组成的 list（或单个 int id），返回一个长度相同的 list，每个元素为一个 dict，就是 json 文件的 &quot;images&quot; 字段中一个/多个的 dict 组成的 list。一般使用 imgs = {k: v for k, v in imgs.items() if k in [&#39;id&#39;, &#39;width&#39;, &#39;height&#39;, &#39;file_name&#39;]} 去除无用的信息。  \n\nann_ids = coco.getAnnIds(imgIds=[], catIds=[], areaRng=[], iscrowd=None)与 getImgIds() 类似，返回所有 annotation 的 id，在 &quot;annotations&quot; -&gt; &quot;id&quot; 字段。一般传入 imgIds=img_ids, iscrowd=False。areaRng 传入一个 float array，代表 area 字段中的大小筛选。\n\ncat_ids = coco.getCatIds(catNms=[], supNms=[], catIds=[])返回所有 categories 的 id：list[int]，在这里就是 [1, 2, 3, ..., 90]。前两个参数是 list[string]，最后一个是 list[int] 类型。\n\nanns = coco.loadAnns(ann_ids) 和 cats = coco.loadCats(cat_ids)与 loadImgs() 类似，返回的就是 annotations 字段中一个/多个的 dict 组成的 list。注意这里都是 Python list 而不是 Numpy Array，所以不能 bbox[2:] = bbox[:2] + bbox[2:] 转换 xywh 为 xyxy。\n\n\nBBox/Mask 相关 API1import pycocotools.mask as mask\n\n各种函数和它的参数及格式在代码 GitHub/cocoapi-mask.py 开头的注释已经写得比较清楚了。说明两点：\n\n里面的 Mask IoU 等计算都需要将 binary masks 转换为 encoded RLE 格式之后进行。之前 JSON 里面的 RLE 是 uncompressed RLE，由 binary masks 到它的转换之前已经介绍过了，而 encoded RLE 是 bytes 类型的，类似于 1。[hxwxn] Binary mask 可以使用 mask.encode() 转换为 encoded RLE，而其他的包括 uncompressed RLE 可以用 mask.frPyObjects() 转换。\n\n例如 binary masks 等等，coco 里面的数组都是 column-major order (Fortran memory order)，调用一些 API 也要使用这种。一般的 numpy array 都是 row-major order (C memory order)，也就是数组里面的每一行内的数在内存中是相邻的，同时在 reshape 和 broadcast 等操作中 last dim 是变化最快的。使用 np.ascontiguousarray() 和 np.asfortranarray() 构造/转换数组。\n\n\n标注可视化在 GitHub/cocoapi-pycocoDemo.ipynb 中已经有了部分 anno 的图片和可视化代码。里面直接使用了 coco.showAnns(anns)，下面 Gist 中的代码用 Numpy/OpenCV 画出一个被分隔成两个 Polygon 的物体的 Mask，和一个 RLE 格式的 Mask。\n\n\nMulti-Polygon Annos\n\nRLE Annos\n\n全部的可以在 COCO 官网上使用 COCO Explorer 搜索查看。\nCOCO Explorer\n\n\nCommon PracticeCOCO 除了 crowd 通常不参与训练，需要排除，此外有一些无效的标注也需要排除，它的类别标号不是连续的，需要创建 dict 映射一下，不然 Loss 函数会不接受大于 len(logit) 的标注。这部分的代码可参考 maskrcnn-benchmark/coco.py。\nPanoptic APIhttps://github.com/cocodataset/panopticapi\n\n\n\nCityScapes Dataset数据集下载：https://www.cityscapes-dataset.com/downloads/\n\n\n在下载界面有很多文件，在这里只需要 leftImg8bit_trainvaltest.zip (11GB) 和 gtFine_trainvaltest.zip (241MB) 即可。图像是在车上左右放了两台相机拍摄的，因此这个数据集还可以有 depth maps 和 Right Image。除了 8bit 以外，还提供 16bit HDR 图片。此外还有车的 GPS 坐标，等等很多信息，供自动驾驶等综合任务使用。extra 中是额外 19998 张粗略标注的图片（对应 gtCoarse.zip (1.3GB)）。对于纯粹的 Detection/Segmentation，只需要前面两个文件就足够了（3475 trainval，1525 test）。\n对于文件目录结构和文件名含义，可以参考 GitHub/cityscapesScripts，这个 repo 还提供一些有用的脚本，git clone 到同一目录之后（去掉 Git 自动加上的文件夹），文件如下图。\nCityScapes Dataset\n\n\n\nCityScapes 的标注格式与 COCO 不同，CityScapes 的 label 储存在对应的文件夹中而不是集中在一个 JSON，每一张图片对应了 4 个 label 文件，前半部分文件名相同：\n\n{city}_{seq:0&gt;6}_{frame:0&gt;6}_gtFine_color.png用于观看的彩色 label\n\n{city}_{seq:0&gt;6}_{frame:0&gt;6}_gtFine_instanceIds.png为 16bit png label。如果是 stuff，则像素值为 0~24 的 class ID；如果是 things，则像素值为 class ID × 1000 + X，X 为连续的自然数，例如 26000, 26001, 26003 可以表示图中的三辆不同的车。class ID 对应的类别名称见下一节。\n\n{city}_{seq:0&gt;6}_{frame:0&gt;6}_gtFine_labelIds.png\n\n{city}_{seq:0&gt;6}_{frame:0&gt;6}_gtFine_polygons.json\n\n\n123456789101112131415161718192021&#123;  \"imgHeight\": 1024,   \"imgWidth\": 2048,   \"objects\": [      &#123;        \"label\": \"road\",         \"polygon\": [            [                0,                 769            ],             [                290,                 574            ],            // ... n polygon coordinates        ]      &#125;,      // ... n objects in this image  ]&#125;\n\n\n\ncityscapesScripts在上面 GitHub Repo 里 Scripts 介绍内的 Most important files 中，包含了 label 的定义和转换工具，可以阅读代码开头的注释。\nhelpers &amp; preparationhelpers/labels.py 内定义了所有类别的 class ID，对于 hasInstances = True and ignoreInEval = False 的，即可以用于 Detection 的，共有 8+1 类。\ncityscapesViewer这是一个使用 PyQt4 写的 GUI 预览程序，在 Windows + Anaconda 下，只需要先 conda install sip，然后在 https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyqt4 下载编译好的 Windows PyQt4 Wheel，然后 pip install 安装。\n12cd CityScapse_ROOT/cityscapesscriptspython viewer/cityscapesViewer.py\n\n即可打开 GUI，按说明使用即可，如果报错 ModuleNotFoundError: No module named &#39;cityscapesscripts&#39;，那么可以在 cityscapesViewer.py 中加上 sys.path.append(&quot;../&quot;)。如果 GUI 打开之后报错路径错误，那么检查下文件目录是否是上节图中那样，或是把 CityScapes 的根目录加到 PATH 中。\n这个 GUI Viewer 非常好用，鼠标移到某个位置显示 label 区域和名称，载入方便迅速，工具齐全。\n\n\n\n\n\nConvert Cityscapes Annotations to COCO Format可以使用 maskrcnn-benchmark 附带的脚本：GitHub/maskrcnn-benchmark/tools/cityscapes/，使用方法：GitHub/Steps to convert Cityscapes Annotations to COCO Format。注意这里面的 gtFine 外面还有一个文件夹，跟上面不一样，或者可以修改 convert_cityscapes_to_coco.py 的 line127~line130。\n此外，由于 CityScapes 数据集较小，可以使用 COCO 训练的模型作为其预训练模型，需要将 80+1 类的预测改为 10+1 类的预测，因此需要对模型进行部分改动。此外还有其他一些技巧，可参考Mask R-CNN: CityScapes\n","dateCreated":"2019-08-11T00:00:00+08:00","dateModified":"2021-05-24T01:28:51+08:00","datePublished":"2019-08-11T00:00:00+08:00","description":"深度学习中 Detection 与 Segmentation 常用数据集 COCO 和 CityScapes 的介绍以及使用，包括标注格式、API/Script、可视化等等。","headline":"COCO 和 CityScapes 数据集的标注格式和使用","image":["https://tangh.github.io/images/thumbnails/coco-and-cityscapes-datasets.png"],"mainEntityOfPage":{"@type":"WebPage","@id":"https://tangh.github.io/articles/coco-and-cityscapes-datasets/"},"publisher":{"@type":"Organization","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg","logo":{"@type":"ImageObject","url":"icon.jpg"}},"url":"https://tangh.github.io/articles/coco-and-cityscapes-datasets/","keywords":"COCO, CityScapes, Computer Vision, Deep Learning, Datasets","thumbnailUrl":"https://tangh.github.io/images/thumbnails/coco-and-cityscapes-datasets.png"}</script>
+    <meta name="description" content="深度学习中 Detection 与 Segmentation 常用数据集 COCO 和 CityScapes 的介绍以及使用，包括标注格式、API&#x2F;Script、可视化等等。">
+<meta property="og:type" content="blog">
+<meta property="og:title" content="COCO 和 CityScapes 数据集的标注格式和使用">
+<meta property="og:url" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;articles&#x2F;coco-and-cityscapes-datasets&#x2F;">
+<meta property="og:site_name" content="雨天等放晴">
+<meta property="og:description" content="深度学习中 Detection 与 Segmentation 常用数据集 COCO 和 CityScapes 的介绍以及使用，包括标注格式、API&#x2F;Script、可视化等等。">
+<meta property="og:locale" content="en_US">
+<meta property="og:image" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;images&#x2F;coco-and-cityscapes-datasets&#x2F;COCO-2014-files.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;images&#x2F;coco-and-cityscapes-datasets&#x2F;COCO-2017-files.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;assets&#x2F;images&#x2F;loading.gif">
+<meta property="og:image" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;assets&#x2F;images&#x2F;loading.gif">
+<meta property="og:image" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;images&#x2F;coco-and-cityscapes-datasets&#x2F;coco-explorer.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;images&#x2F;coco-and-cityscapes-datasets&#x2F;cityscapes-files.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;images&#x2F;coco-and-cityscapes-datasets&#x2F;cityscapes-viewer-1.jpg">
+<meta property="og:image" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;images&#x2F;coco-and-cityscapes-datasets&#x2F;cityscapes-viewer-2.jpg">
+<meta property="article:published_time" content="2019-08-10T16:00:00.000Z">
+<meta property="article:modified_time" content="2021-05-23T17:28:51.051Z">
+<meta property="article:author" content="Tang Huan">
+<meta property="article:tag" content="COCO">
+<meta property="article:tag" content="CityScapes">
+<meta property="article:tag" content="计算机视觉">
+<meta property="article:tag" content="深度学习">
+<meta property="article:tag" content="数据集">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;images&#x2F;coco-and-cityscapes-datasets&#x2F;COCO-2014-files.png">
+    
+    
+        
+    
+    
+        <meta property="og:image" content="https://tangh.github.io/assets/images/icon.jpg"/>
+    
+    
+        <meta property="og:image" content="https://tangh.github.io/images/thumbnails/coco-and-cityscapes-datasets.png"/>
+        <meta class="swiftype" name="image" data-type="enum" content="https://tangh.github.io/images/thumbnails/coco-and-cityscapes-datasets.png"/>
+    
+    
+    
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
+    <!--STYLES-->
+    
+<link rel="stylesheet" href="/assets/css/style-iaetwm81hfopcuajcp7qnh2zsnqn4dhiu3nftuj79wdhe7fie6l4r0thrs6g.min.css">
+
+    <!--STYLES END-->
+    
+    <script async src="https://www.googletagmanager.com/gtag/js?id=UA-137837052-1"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'UA-137837052-1');
+    </script><!-- hexo-inject:begin --><!-- hexo-inject:end -->
+
+
+    
+
+</head>
+
+    <body>
+        <!-- hexo-inject:begin --><!-- hexo-inject:end --><div id="blog">
+            <!-- Define author's picture -->
+
+
+    
+        
+            
+        
+    
+
+<header id="header" data-behavior="4">
+    <i id="btn-open-sidebar" class="fa fa-lg fa-bars"></i>
+    <div class="header-title">
+        <a
+            class="header-title-link"
+            href="/"
+            aria-label=""
+        >
+            雨天等放晴
+        </a>
+    </div>
+    
+        
+            <a
+                class="header-right-picture "
+                href="#about"
+                aria-label="Open the link: /#about"
+            >
+        
+        
+            <img class="header-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+        </a>
+    
+</header>
+
+            <!-- Define author's picture -->
+
+
+
+        
+    
+
+<nav id="sidebar" data-behavior="4">
+    <div class="sidebar-container">
+        
+            <div class="sidebar-profile">
+                <a
+                    href="/#about"
+                    aria-label="Read more about the author"
+                >
+                    <img class="sidebar-profile-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+                </a>
+                <h4 class="sidebar-profile-name">Tang Huan</h4>
+                
+                    <h5 class="sidebar-profile-bio"></h5>
+                
+            </div>
+        
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/"
+                            
+                            rel="noopener"
+                            title="Home"
+                        >
+                        <i class="sidebar-button-icon fa fa-home" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Home</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-categories"
+                            
+                            rel="noopener"
+                            title="Categories"
+                        >
+                        <i class="sidebar-button-icon fa fa-bookmark" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Categories</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-tags"
+                            
+                            rel="noopener"
+                            title="Tags"
+                        >
+                        <i class="sidebar-button-icon fa fa-tags" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Tags</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-archives"
+                            
+                            rel="noopener"
+                            title="Archives"
+                        >
+                        <i class="sidebar-button-icon fa fa-archive" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Archives</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/about"
+                            
+                            rel="noopener"
+                            title="About"
+                        >
+                        <i class="sidebar-button-icon fas fa-cube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">About</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://twitter.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Twitter"
+                        >
+                        <i class="sidebar-button-icon fab fa-twitter" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Twitter</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.flickr.com/photos/135277712@N07/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Flickr"
+                        >
+                        <i class="sidebar-button-icon fab fa-flickr" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Flickr</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.instagram.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Instagram"
+                        >
+                        <i class="sidebar-button-icon fab fa-instagram" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Instagram</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="YouTube"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">YouTube</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://space.bilibili.com/634428/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="BiliBili"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube-square" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">BiliBili</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+    </div>
+</nav>
+
+            
+            <div id="main" data-behavior="4"
+                 class="
+                        hasCoverMetaIn
+                        ">
+                
+<article class="post">
+    
+    
+        <div class="post-header main-content-wrap text-center">
+    
+        <h1 class="post-title">
+            COCO 和 CityScapes 数据集的标注格式和使用
+        </h1>
+    
+    
+        <div class="post-meta">
+    <time datetime="2019-08-11T00:00:00+08:00">
+	
+		    Aug 11, 2019
+    	
+    </time>
+    
+        <span>in </span>
+        
+    <a class="category-link" href="/categories/Computer-Science/">Computer Science</a>, <a class="category-link" href="/categories/Computer-Science/Deep-Learning/">Deep Learning</a>
+
+
+    
+</div>
+
+    
+</div>
+
+    
+    
+        <div class="post-content markdown">
+    
+        <div class="main-content-wrap">
+            <!-- excerpt -->
+
+
+<p>COCO 和 CityScapes 是 Detection 常用的两个数据集，当然由于 Instance Segmentation 和 Detection 任务是相似的，且它们都提供 mask 级的 label，所以也可以使用。目前它们也都提供了 stuff 的 label，所以也可以用于 Semantic Segmentation，以及结合两种 label 之后用于 Panoptic Segmentation。此外它们还可以用于一些其它任务，下面会提到。</p>
+<p>本文主要关注 Detection/Instance Segmentation，对于其它 Segmentation 也会简略概括，其余一些 labels 则直接复制网上现有资料或略过。</p>
+<h1 id="table-of-contents">Table of Contents</h1><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#COCO-Dataset"><span class="toc-text">COCO Dataset</span></a></li><li class="toc-item toc-level-1"><a class="toc-link" href="#COCO-标注格式"><span class="toc-text">COCO 标注格式</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#Instance-Object-Detection-的标注格式"><span class="toc-text">Instance (Object Detection) 的标注格式</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#COCO-Keypoint-Detection-Stuff-Segmentation-Image-Caption-的标注格式"><span class="toc-text">COCO Keypoint Detection &#x2F; Stuff Segmentation &#x2F; Image Caption 的标注格式</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#COCO-Panoptic-Segmentaion-的标注格式"><span class="toc-text">COCO Panoptic Segmentaion 的标注格式</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#COCO-Python-API"><span class="toc-text">COCO Python API</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#获取-Annotation-信息相关-API"><span class="toc-text">获取 Annotation 信息相关 API</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#BBox-Mask-相关-API"><span class="toc-text">BBox&#x2F;Mask 相关 API</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#标注可视化"><span class="toc-text">标注可视化</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Common-Practice"><span class="toc-text">Common Practice</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Panoptic-API"><span class="toc-text">Panoptic API</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#CityScapes-Dataset"><span class="toc-text">CityScapes Dataset</span></a></li><li class="toc-item toc-level-1"><a class="toc-link" href="#CityScapes-的标注格式"><span class="toc-text">CityScapes 的标注格式</span></a></li><li class="toc-item toc-level-1"><a class="toc-link" href="#cityscapesScripts"><span class="toc-text">cityscapesScripts</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#helpers-amp-preparation"><span class="toc-text">helpers &amp; preparation</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#cityscapesViewer"><span class="toc-text">cityscapesViewer</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Convert-Cityscapes-Annotations-to-COCO-Format"><span class="toc-text">Convert Cityscapes Annotations to COCO Format</span></a></li></ol></li></ol>
+
+
+
+<h1 id="COCO-Dataset"><a href="#COCO-Dataset" class="headerlink" title="COCO Dataset"></a>COCO Dataset</h1><p>COCO 的全称是 Common Objects in COntext，是微软团队提供的一个可以用来进行目标检测、图像分割、关键点检测、图像描述的数据集。COCO 通过在 Flickr 上搜索 80 个对象类别和各种场景类型来收集图像，其使用了亚马逊的 Mechanical Turk (AMT)。</p>
+<p>COCO 目前有 2014 和 2017 两个版本，图片都是一样的，只是 train/val 的划分不同。COCO 2014 经过实践后，开始将一部分 val 的图片划入 train 中。后来的 2017 中采用了这一划分。如果是 Detection/Instance Segmentation 这两个版本没有太多区别，2014 有现成的新 JSON。2017 后来出了 Semantic Segmentation 和 Panoptic Segmentation 的 label，除了 JSON 还提供一种 PNG 图片格式的，这两个 task 直接用 2017 会方便一些。</p>
+<div class="alert info"><p>数据集下载：<a href="http://cocodataset.org/#download" target="_blank" rel="noopener">http://cocodataset.org/#download</a></p>
+<p>COCO 2014 trainval35k JSON 下载：<a href="https://github.com/rbgirshick/py-faster-rcnn/blob/master/data/README.md" target="_blank" rel="noopener">https://github.com/rbgirshick/py-faster-rcnn/blob/master/data/README.md</a></p>
+</div>
+
+<p>对于 Detection/Instance Segmentation，<code>COCO_2017_train = COCO_2014_train + valminusminival (:val - minival)</code>，<code>COCO_2017_val = minival</code>。</p>
+<p>在同一个文件夹中解压 zip 文件，得到的文件结构如下：</p>
+<ul>
+<li><p>COCO 2014</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="/images/coco-and-cityscapes-datasets/COCO-2014-files.png" title="COCO 2014" data-caption="COCO 2014" data-fancybox="default"><img class="fig-img" src="/images/coco-and-cityscapes-datasets/COCO-2014-files.png" alt="COCO 2014"></a><span class="caption">COCO 2014</span></div><div style="clear:both;"></div>
+</li>
+<li><p>COCO 2017</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="/images/coco-and-cityscapes-datasets/COCO-2017-files.png" title="COCO 2017" data-caption="COCO 2017" data-fancybox="default"><img class="fig-img" src="/images/coco-and-cityscapes-datasets/COCO-2017-files.png" alt="COCO 2017"></a><span class="caption">COCO 2017</span></div><div style="clear:both;"></div>
+
+</li>
+</ul>
+<p>有些解压工具会一次性读取/扫描 zip 里面的所有文件，导致 train 这种超大的 zip 打开就卡住，可以使用以下 Python 脚本解压，只需修改 <code>coco_dataset_path</code> 后运行。且多数解压工具会自动在外面再套上一个文件夹，需要手动调整一下目录结构或者用下面的脚本。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> zipfile</span><br><span class="line"><span class="keyword">import</span> os</span><br><span class="line"></span><br><span class="line">coco_dataset_path = <span class="string">'/export/public/MS-COCO-2017'</span></span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">extract_zipfile</span><span class="params">(filepath)</span>:</span></span><br><span class="line">    print(<span class="string">'Extracting &#123;&#125;...'</span>.format(filepath))</span><br><span class="line"></span><br><span class="line">    <span class="keyword">global</span> coco_dataset_path</span><br><span class="line">    zip_ref = zipfile.ZipFile(filepath, <span class="string">'r'</span>)</span><br><span class="line">    zip_ref.extractall(coco_dataset_path)</span><br><span class="line">    zip_ref.close()</span><br><span class="line"></span><br><span class="line">    print(<span class="string">'Successfully Extracted &#123;&#125;.'</span>.format(filepath))</span><br><span class="line"></span><br><span class="line"><span class="keyword">assert</span> os.path.exists(coco_dataset_path), <span class="string">'Path not exist.'</span></span><br><span class="line">zipfiles = [os.path.join(coco_dataset_path, file_name) </span><br><span class="line">            <span class="keyword">for</span> file_name <span class="keyword">in</span> os.listdir(coco_dataset_path) </span><br><span class="line">            <span class="keyword">if</span> os.path.splitext(file_name)[<span class="number">-1</span>] == <span class="string">'.zip'</span>]</span><br><span class="line"></span><br><span class="line">print(<span class="string">"Zip files will be extrated:"</span>)</span><br><span class="line">print(<span class="string">'\n'</span>.join(zipfiles))</span><br><span class="line"></span><br><span class="line"><span class="keyword">for</span> file_name <span class="keyword">in</span> zipfiles: extract_zipfile(file_name)</span><br></pre></td></tr></table></figure>
+
+<p>COCO 有 Object Detection (Instance Segmentation)、Keypoint Detection、Stuff Segmentation (Semantic Segmentation)、Panoptic Segmentation、Image Captioning 五种标注。</p>
+<h1 id="COCO-标注格式"><a href="#COCO-标注格式" class="headerlink" title="COCO 标注格式"></a>COCO 标注格式</h1><p>COCO 官网有 <a href="http://cocodataset.org/#format-data" target="_blank" rel="noopener">Data Format</a> 的简介，下面逐项详细介绍。</p>
+<h2 id="Instance-Object-Detection-的标注格式"><a href="#Instance-Object-Detection-的标注格式" class="headerlink" title="Instance (Object Detection) 的标注格式"></a>Instance (Object Detection) 的标注格式</h2><p>以下为 COCO-2017 Val 的 JSON (<code>instance_val2017.json</code>) 部分内容和整体格式</p>
+<figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br></pre></td><td class="code"><pre><span class="line">&#123;</span><br><span class="line"><span class="attr">"info"</span>: &#123;<span class="attr">"description"</span>: <span class="string">"COCO 2017 Dataset"</span>,</span><br><span class="line">        <span class="attr">"url"</span>: <span class="string">"http://cocodataset.org"</span>,</span><br><span class="line">        <span class="attr">"version"</span>: <span class="string">"1.0"</span>,</span><br><span class="line">        <span class="attr">"year"</span>: <span class="number">2017</span>,</span><br><span class="line">        <span class="attr">"contributor"</span>: <span class="string">"COCO Consortium"</span>,</span><br><span class="line">        <span class="attr">"date_created"</span>: <span class="string">"2017/09/01"</span></span><br><span class="line">        &#125;,</span><br><span class="line"><span class="attr">"licenses"</span>: [</span><br><span class="line">              &#123;<span class="attr">"url"</span>: <span class="string">"http://creativecommons.org/licenses/by-nc-sa/2.0/"</span>,</span><br><span class="line">              <span class="attr">"id"</span>: <span class="number">1</span>,</span><br><span class="line">              <span class="attr">"name"</span>: <span class="string">"Attribution-NonCommercial-ShareAlike License"</span>&#125;,</span><br><span class="line">              &#123;<span class="attr">"url"</span>: <span class="string">"..."</span>,<span class="attr">"id"</span>: <span class="number">2</span>,<span class="attr">"name"</span>: <span class="string">"..."</span>&#125;,</span><br><span class="line">            ...],</span><br><span class="line"><span class="attr">"images"</span>: [</span><br><span class="line">            &#123;<span class="attr">"license"</span>: <span class="number">4</span>,</span><br><span class="line">            <span class="attr">"file_name"</span>: <span class="string">"000000397133.jpg"</span>,</span><br><span class="line">            <span class="attr">"coco_url"</span>: <span class="string">"http://images.cocodataset.org/val2017/000000397133.jpg"</span>,</span><br><span class="line">            <span class="attr">"height"</span>: <span class="number">427</span>,</span><br><span class="line">            <span class="attr">"width"</span>: <span class="number">640</span>,</span><br><span class="line">            <span class="attr">"date_captured"</span>: <span class="string">"2013-11-14 17:02:52"</span>,</span><br><span class="line">            <span class="attr">"flickr_url"</span>: <span class="string">"http://farm7.staticflickr.com/6116/6255196340_da26cf2c9e_z.jpg"</span>,</span><br><span class="line">            <span class="attr">"id"</span>: <span class="number">397133</span></span><br><span class="line">            &#125;,</span><br><span class="line">            &#123;<span class="attr">"license"</span>: <span class="number">1</span>,</span><br><span class="line">            <span class="attr">"file_name"</span>: <span class="string">"000000037777.jpg"</span>,</span><br><span class="line">            <span class="attr">"coco_url"</span>: <span class="string">"http://images.cocodataset.org/val2017/000000037777.jpg"</span>,</span><br><span class="line">            <span class="attr">"height"</span>: <span class="number">230</span>,</span><br><span class="line">            <span class="attr">"width"</span>: <span class="number">352</span>,</span><br><span class="line">            <span class="attr">"date_captured"</span>: <span class="string">"2013-11-14 20:55:31"</span>,</span><br><span class="line">            <span class="attr">"flickr_url"</span>: <span class="string">"http://farm9.staticflickr.com/8429/7839199426_f6d48aa585_z.jpg"</span>,</span><br><span class="line">            <span class="attr">"id"</span>: <span class="number">37777</span></span><br><span class="line">            &#125;,</span><br><span class="line">           ...],</span><br><span class="line"><span class="attr">"annotations"</span>: [</span><br><span class="line">                 &#123;<span class="attr">"segmentation"</span>: [[<span class="number">510.66</span>,<span class="number">423.01</span>,<span class="number">511.72</span>,<span class="number">420.03</span>,<span class="number">510.45</span>,<span class="number">416.0</span>,<span class="number">510.34</span>,<span class="number">413.02</span>,<span class="number">510.77</span>,<span class="number">410.26</span>,<span class="number">510.77</span>,<span class="number">407.5</span>,<span class="number">510.34</span>,<span class="number">405.16</span>,<span class="number">511.51</span>,<span class="number">402.83</span>,<span class="number">511.41</span>,<span class="number">400.49</span>,<span class="number">510.24</span>,<span class="number">398.16</span>,<span class="number">509.39</span>,<span class="number">397.31</span>,<span class="number">504.61</span>,<span class="number">399.22</span>,<span class="number">502.17</span>,<span class="number">399.64</span>,<span class="number">500.89</span>,<span class="number">401.66</span>,<span class="number">500.47</span>,<span class="number">402.08</span>,<span class="number">499.09</span>,<span class="number">401.87</span>,<span class="number">495.79</span>,<span class="number">401.98</span>,<span class="number">490.59</span>,<span class="number">401.77</span>,<span class="number">488.79</span>,<span class="number">401.77</span>,<span class="number">485.39</span>,<span class="number">398.58</span>,<span class="number">483.9</span>,<span class="number">397.31</span>,<span class="number">481.56</span>,<span class="number">396.35</span>,<span class="number">478.48</span>,<span class="number">395.93</span>,<span class="number">476.68</span>,<span class="number">396.03</span>,<span class="number">475.4</span>,<span class="number">396.77</span>,<span class="number">473.92</span>,<span class="number">398.79</span>,<span class="number">473.28</span>,<span class="number">399.96</span>,<span class="number">473.49</span>,<span class="number">401.87</span>,<span class="number">474.56</span>,<span class="number">403.47</span>,<span class="number">473.07</span>,<span class="number">405.59</span>,<span class="number">473.39</span>,<span class="number">407.71</span>,<span class="number">476.68</span>,<span class="number">409.41</span>,<span class="number">479.23</span>,<span class="number">409.73</span>,<span class="number">481.56</span>,<span class="number">410.69</span>,<span class="number">480.4</span>,<span class="number">411.85</span>,<span class="number">481.35</span>,<span class="number">414.93</span>,<span class="number">479.86</span>,<span class="number">418.65</span>,<span class="number">477.32</span>,<span class="number">420.03</span>,<span class="number">476.04</span>,<span class="number">422.58</span>,<span class="number">479.02</span>,<span class="number">422.58</span>,<span class="number">480.29</span>,<span class="number">423.01</span>,<span class="number">483.79</span>,<span class="number">419.93</span>,<span class="number">486.66</span>,<span class="number">416.21</span>,<span class="number">490.06</span>,<span class="number">415.57</span>,<span class="number">492.18</span>,<span class="number">416.85</span>,<span class="number">491.65</span>,<span class="number">420.24</span>,<span class="number">492.82</span>,<span class="number">422.9</span>,<span class="number">493.56</span>,<span class="number">424.39</span>,<span class="number">496.43</span>,<span class="number">424.6</span>,<span class="number">498.02</span>,<span class="number">423.01</span>,<span class="number">498.13</span>,<span class="number">421.31</span>,<span class="number">497.07</span>,<span class="number">420.03</span>,<span class="number">497.07</span>,<span class="number">415.15</span>,<span class="number">496.33</span>,<span class="number">414.51</span>,<span class="number">501.1</span>,<span class="number">411.96</span>,<span class="number">502.06</span>,<span class="number">411.32</span>,<span class="number">503.02</span>,<span class="number">415.04</span>,<span class="number">503.33</span>,<span class="number">418.12</span>,<span class="number">501.1</span>,<span class="number">420.24</span>,<span class="number">498.98</span>,<span class="number">421.63</span>,<span class="number">500.47</span>,<span class="number">424.39</span>,<span class="number">505.03</span>,<span class="number">423.32</span>,<span class="number">506.2</span>,<span class="number">421.31</span>,<span class="number">507.69</span>,<span class="number">419.5</span>,<span class="number">506.31</span>,<span class="number">423.32</span>,<span class="number">510.03</span>,<span class="number">423.01</span>,<span class="number">510.45</span>,<span class="number">423.01</span>]],</span><br><span class="line">                 <span class="attr">"area"</span>: <span class="number">702.1057499999998</span>,</span><br><span class="line">                 <span class="attr">"iscrowd"</span>: <span class="number">0</span>,</span><br><span class="line">                 <span class="attr">"image_id"</span>: <span class="number">289343</span>,</span><br><span class="line">                 <span class="attr">"bbox"</span>: [<span class="number">473.07</span>,<span class="number">395.93</span>,<span class="number">38.65</span>,<span class="number">28.67</span>],</span><br><span class="line">                 <span class="attr">"category_id"</span>: <span class="number">18</span>,</span><br><span class="line">                 <span class="attr">"id"</span>: <span class="number">1768</span></span><br><span class="line">                 &#125;,</span><br><span class="line">               ...,</span><br><span class="line">                 &#123;<span class="attr">"segmentation"</span>: &#123;<span class="attr">"counts"</span>: [<span class="number">20736</span>,<span class="number">2</span>,<span class="number">453</span>,<span class="number">5</span>,<span class="number">452</span>,<span class="number">9</span>,<span class="number">447</span>,<span class="number">13</span>,<span class="number">444</span>,<span class="number">13</span>,<span class="number">443</span>,<span class="number">15</span>,<span class="number">442</span>,<span class="number">15</span>,<span class="number">442</span>,<span class="number">15</span>,<span class="number">443</span>,<span class="number">15</span>,<span class="number">442</span>,<span class="number">15</span>,<span class="number">443</span>,<span class="number">14</span>,<span class="number">444</span>,<span class="number">13</span>,<span class="number">446</span>,<span class="number">10</span>,<span class="number">448</span>,<span class="number">8</span>,<span class="number">451</span>,<span class="number">4</span>,<span class="number">108769</span>,<span class="number">9</span>,<span class="number">446</span>,<span class="number">12</span>,<span class="number">439</span>,<span class="number">19</span>,<span class="number">1</span>,<span class="number">14</span>,<span class="number">8</span>,<span class="number">11</span>,<span class="number">402</span>,<span class="number">39</span>,<span class="number">3</span>,<span class="number">14</span>,<span class="number">401</span>,<span class="number">57</span>,<span class="number">399</span>,<span class="number">59</span>,<span class="number">398</span>,<span class="number">59</span>,<span class="number">397</span>,<span class="number">60</span>,<span class="number">397</span>,<span class="number">60</span>,<span class="number">397</span>,<span class="number">60</span>,<span class="number">398</span>,<span class="number">59</span>,<span class="number">397</span>,<span class="number">60</span>,<span class="number">397</span>,<span class="number">60</span>,<span class="number">397</span>,<span class="number">59</span>,<span class="number">399</span>,<span class="number">57</span>,<span class="number">400</span>,<span class="number">15</span>,<span class="number">1</span>,<span class="number">9</span>,<span class="number">7</span>,<span class="number">25</span>,<span class="number">401</span>,<span class="number">14</span>,<span class="number">16</span>,<span class="number">26</span>,<span class="number">402</span>,<span class="number">12</span>,<span class="number">15</span>,<span class="number">28</span>,<span class="number">404</span>,<span class="number">9</span>,<span class="number">14</span>,<span class="number">30</span>,<span class="number">406</span>,<span class="number">5</span>,<span class="number">14</span>,<span class="number">31</span>,<span class="number">406</span>,<span class="number">50</span>,<span class="number">405</span>,<span class="number">50</span>,<span class="number">407</span>,<span class="number">44</span>,<span class="number">412</span>,<span class="number">41</span>,<span class="number">7</span>,<span class="number">6</span>,<span class="number">402</span>,<span class="number">40</span>,<span class="number">7</span>,<span class="number">9</span>,<span class="number">401</span>,<span class="number">40</span>,<span class="number">7</span>,<span class="number">10</span>,<span class="number">399</span>,<span class="number">40</span>,<span class="number">7</span>,<span class="number">12</span>,<span class="number">398</span>,<span class="number">39</span>,<span class="number">8</span>,<span class="number">12</span>,<span class="number">397</span>,<span class="number">39</span>,<span class="number">8</span>,<span class="number">13</span>,<span class="number">397</span>,<span class="number">60</span>,<span class="number">397</span>,<span class="number">60</span>,<span class="number">397</span>,<span class="number">61</span>,<span class="number">396</span>,<span class="number">61</span>,<span class="number">397</span>,<span class="number">61</span>,<span class="number">396</span>,<span class="number">62</span>,<span class="number">396</span>,<span class="number">61</span>,<span class="number">397</span>,<span class="number">60</span>,<span class="number">399</span>,<span class="number">4</span>,<span class="number">1</span>,<span class="number">53</span>,<span class="number">405</span>,<span class="number">52</span>,<span class="number">406</span>,<span class="number">51</span>,<span class="number">407</span>,<span class="number">50</span>,<span class="number">408</span>,<span class="number">17</span>,<span class="number">1</span>,<span class="number">30</span>,<span class="number">410</span>,<span class="number">8</span>,<span class="number">2</span>,<span class="number">4</span>,<span class="number">18</span>,<span class="number">14</span>,<span class="number">413</span>,<span class="number">4</span>,<span class="number">32</span>,<span class="number">6</span>,<span class="number">95474</span>,<span class="number">8</span>,<span class="number">5</span>,<span class="number">14</span>,<span class="number">428</span>,<span class="number">11</span>,<span class="number">2</span>,<span class="number">17</span>,<span class="number">425</span>,<span class="number">33</span>,<span class="number">412</span>,<span class="number">1</span>,<span class="number">3</span>,<span class="number">41</span>,<span class="number">410</span>,<span class="number">4</span>,<span class="number">1</span>,<span class="number">43</span>,<span class="number">409</span>,<span class="number">48</span>,<span class="number">408</span>,<span class="number">50</span>,<span class="number">407</span>,<span class="number">51</span>,<span class="number">405</span>,<span class="number">52</span>,<span class="number">405</span>,<span class="number">47</span>,<span class="number">5</span>,<span class="number">1</span>,<span class="number">404</span>,<span class="number">28</span>,<span class="number">4</span>,<span class="number">8</span>,<span class="number">418</span>,<span class="number">25</span>,<span class="number">432</span>,<span class="number">24</span>,<span class="number">434</span>,<span class="number">22</span>,<span class="number">436</span>,<span class="number">12</span>,<span class="number">2</span>,<span class="number">6</span>,<span class="number">439</span>,<span class="number">5</span>,<span class="number">34552</span>],</span><br><span class="line">                   <span class="attr">"size"</span>: [<span class="number">457</span>,<span class="number">640</span>]</span><br><span class="line">                   &#125;,</span><br><span class="line">                 <span class="attr">"area"</span>: <span class="number">3074</span>,</span><br><span class="line">                 <span class="attr">"iscrowd"</span>: <span class="number">1</span>,</span><br><span class="line">                 <span class="attr">"image_id"</span>: <span class="number">49759</span>,</span><br><span class="line">                 <span class="attr">"bbox"</span>: [<span class="number">45</span>,<span class="number">167</span>,<span class="number">519</span>,<span class="number">65</span>],</span><br><span class="line">                 <span class="attr">"category_id"</span>: <span class="number">1</span>,</span><br><span class="line">                 <span class="attr">"id"</span>: <span class="number">900100049759</span></span><br><span class="line">                 &#125;,</span><br><span class="line">               ...],</span><br><span class="line"><span class="attr">"categories"</span>: [&#123;<span class="attr">"supercategory"</span>: <span class="string">"person"</span>,<span class="attr">"id"</span>: <span class="number">1</span>,<span class="attr">"name"</span>: <span class="string">"person"</span>&#125;,</span><br><span class="line">                ...,</span><br><span class="line">               &#123;<span class="attr">"supercategory"</span>: <span class="string">"indoor"</span>,<span class="attr">"id"</span>: <span class="number">90</span>,<span class="attr">"name"</span>: <span class="string">"toothbrush"</span>&#125;</span><br><span class="line">              ]</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<ol>
+<li><p><code>info</code> 是整个数据集的描述信息，之后不会用到。</p>
+</li>
+<li><p><code>licenses</code> 是协议的 id、网址和名称，之后每张图片的信息中都会有一个 licenses id。</p>
+</li>
+<li><p><code>images</code> 中一般需要用到的有四个。<code>file_name</code>：图片在对应 train/val/test 文件夹中的文件名；<code>height/width</code>：图片的宽高；<code>id</code>：图片的唯一 id，在 COCO API 中会用到。</p>
+</li>
+<li><p><code>annotations</code> 所有图片上所有物体的标注统一储存在同一个 “annotations” 中，在这里面的每一个标注都含有它对应哪张图片的信息（<code>img_id</code>），和它自己的序号（<code>id</code>）。<br><code>&quot;iscrowd&quot;: 0</code> 的 annotation 是 Polygons 形式的，表示单个的对象，它的 “segmentation” 是二维 list，这是因为一个物体可能被遮挡部分而分隔开（少数情况），需要多个封闭的曲线才能标注。每个一维 list 里面就是一个封闭图形，值为 xyxyxy… 形式的坐标，即 <code>[510.66,423.01,511.72,420.03,...]</code> 代表图上 <code>(510.66,423.01), (511.72,420.03), ...</code> n 个点。<br><code>&quot;iscrowd&quot;: 1</code> 的是 RLE（<a href="https://en.wikipedia.org/wiki/Run-length_encoding" target="_blank" rel="noopener">Run-Length Encoding，游程编码</a>） 形式的，标注一组对象（密集，无法很好地分隔成单个的标注）。由 <code>0</code> 开始，交替进行，比如 <code>[20736,2,453, ...]</code> 表示有 20736 个 <code>0</code>，接下来是 2 个 <code>1</code>，接下来是 453 个 <code>0</code> …，所以这种形式还需要一个 <code>size</code> 信息，最后把这一行 reshape 成这个形状就得到 label。<br><code>&quot;area&quot;</code> 为 mask 的面积。<br><code>&quot;bbox&quot;</code> 框的坐标，xywh 格式。都是 0-index 的，横轴为 x/w，像素的中心点为原点，即 <code>bbox = [0, 0, 1, 1]</code> 包围了（左上角）第一个像素。</p>
+</li>
+<li><p><code>categories</code> 一个小类一个 id，被 <code>annotations</code> 中指向。一个大类下包含若干个小类。注意 COCO 总共有 80+1 类 things，而 id 是 1~90，并不是连续的。</p>
+</li>
+</ol>
+<p>其中，<code>info</code>、<code>licenses</code>、<code>images</code> 这三个字段的内容在不同的 task 的 JSON 文件中是一样的。不同的是 <code>annotation</code> 和 <code>category</code>。下面的只会介绍这两个字段。</p>
+<h2 id="COCO-Keypoint-Detection-Stuff-Segmentation-Image-Caption-的标注格式"><a href="#COCO-Keypoint-Detection-Stuff-Segmentation-Image-Caption-的标注格式" class="headerlink" title="COCO Keypoint Detection / Stuff Segmentation / Image Caption 的标注格式"></a>COCO Keypoint Detection / Stuff Segmentation / Image Caption 的标注格式</h2><p><strong>Keypoint Detection</strong></p>
+<p><code>annotations</code> 完全包含上面 Detection 中的内容，并且每个 anno 多出两个字段：<code>&quot;keypoints&quot;: [x1,y1,v1,...], ...</code> 和 <code>&quot;num_keypoints&quot;: &lt;int&gt;, ...</code>。<br><code>keypoints</code> 是一个长度为 3×k 的数组，其中 k 是这个类中 keypoints 的总数量。每一个 keypoint 是一个长度为 3 的数组。第一和第二个元素分别是 x 和 y 坐标值，第三个元素是个标志位 v，v=0 时表示这个关键点没有标注（这种情况下 x=y=v=0），v=1 时表示这个关键点标注了但是不可见（被遮挡了），v=2 时表示这个关键点标注了同时也可见。<br><code>num_keypoints</code> 表示这个目标上被标注的关键点的数量（v&gt;0），比较小的目标上无法标注关键点。</p>
+<p><code>categories</code> 则只有一类 <code>&quot;supercategory&quot;: &quot;person&quot;</code>，同样包含了 Instance Detection 中的所有内容，并且多出了两个字段：<code>&quot;keypoints&quot;: [str]</code> 和 <code>&quot;skeleton&quot;: [edge]</code>。<br><code>keypoints</code> 是一个长度为k的数组，包含了每个关键点的名字。<br><code>skeleton</code> 定义了各个关键点之间的连接性（比如人的左手腕和左肘就是连接的）。</p>
+<figure class="highlight"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">"annotations":[</span><br><span class="line">&#123;</span><br><span class="line">  <span class="attr">"segmentation"</span>: [[<span class="number">125.12</span>,<span class="number">539.69</span>,<span class="number">140.94</span>,<span class="number">522.43</span>...]],</span><br><span class="line">  <span class="attr">"num_keypoints"</span>: <span class="number">10</span>,</span><br><span class="line">  <span class="attr">"area"</span>: <span class="number">47803.27955</span>,</span><br><span class="line">  <span class="attr">"iscrowd"</span>: <span class="number">0</span>,</span><br><span class="line">  <span class="attr">"keypoints"</span>: [<span class="number">0</span>,<span class="number">0</span>,<span class="number">0</span>,<span class="number">0</span>,<span class="number">0</span>,<span class="number">0</span>,<span class="number">0</span>,<span class="number">0</span>,<span class="number">0</span>,<span class="number">0</span>,<span class="number">0</span>,<span class="number">0</span>,<span class="number">0</span>,<span class="number">0</span>,<span class="number">0</span>,<span class="number">142</span>,<span class="number">309</span>,<span class="number">1</span>,<span class="number">177</span>,<span class="number">320</span>,<span class="number">2</span>,<span class="number">191</span>,<span class="number">398.</span>..],</span><br><span class="line">  <span class="attr">"image_id"</span>: <span class="number">425226</span>,<span class="attr">"bbox"</span>: [<span class="number">73.35</span>,<span class="number">206.02</span>,<span class="number">300.58</span>,<span class="number">372.5</span>],<span class="attr">"category_id"</span>: <span class="number">1</span>,</span><br><span class="line">  <span class="attr">"id"</span>: <span class="number">183126</span></span><br><span class="line">&#125;, ...]</span><br><span class="line">,</span><br><span class="line"></span><br><span class="line">"categories":[</span><br><span class="line">&#123;</span><br><span class="line">  <span class="attr">"supercategory"</span>: <span class="string">"person"</span>,</span><br><span class="line">  <span class="attr">"id"</span>: <span class="number">1</span>,</span><br><span class="line">  <span class="attr">"name"</span>: <span class="string">"person"</span>,</span><br><span class="line">  <span class="attr">"keypoints"</span>: [<span class="string">"nose"</span>,<span class="string">"left_eye"</span>,<span class="string">"right_eye"</span>,<span class="string">"left_ear"</span>,<span class="string">"right_ear"</span>,<span class="string">"left_shoulder"</span>,<span class="string">"right_shoulder"</span>,<span class="string">"left_elbow"</span>,<span class="string">"right_elbow"</span>,<span class="string">"left_wrist"</span>,<span class="string">"right_wrist"</span>,<span class="string">"left_hip"</span>,<span class="string">"right_hip"</span>,<span class="string">"left_knee"</span>,<span class="string">"right_knee"</span>,<span class="string">"left_ankle"</span>,<span class="string">"right_ankle"</span>],</span><br><span class="line">  <span class="attr">"skeleton"</span>: [[<span class="number">16</span>,<span class="number">14</span>],[<span class="number">14</span>,<span class="number">12</span>],[<span class="number">17</span>,<span class="number">15</span>],[<span class="number">15</span>,<span class="number">13</span>],[<span class="number">12</span>,<span class="number">13</span>],[<span class="number">6</span>,<span class="number">12</span>],[<span class="number">7</span>,<span class="number">13</span>],[<span class="number">6</span>,<span class="number">7</span>],[<span class="number">6</span>,<span class="number">8</span>],[<span class="number">7</span>,<span class="number">9</span>],[<span class="number">8</span>,<span class="number">10</span>],[<span class="number">9</span>,<span class="number">11</span>],[<span class="number">2</span>,<span class="number">3</span>],[<span class="number">1</span>,<span class="number">2</span>],[<span class="number">1</span>,<span class="number">3</span>],[<span class="number">2</span>,<span class="number">4</span>],[<span class="number">3</span>,<span class="number">5</span>],[<span class="number">4</span>,<span class="number">6</span>],[<span class="number">5</span>,<span class="number">7</span>]]</span><br><span class="line">&#125;]</span><br></pre></td></tr></table></figure>
+
+<p><strong>Stuff Segmentation (Semantic Segmentation)</strong></p>
+<p>格式字段与上面 Instance Detection 的完全相同，只是 <code>annotations</code> 中的 <code>iscrowd</code> 没有意义，默认为 <code>0</code>，且每个 <code>segmentation</code> 的值都是 encoded RLE，而不是之前的 polygons/uncompressed RLE（后面有 encoded/uncompressed 的介绍）。<code>categories</code> 的 id 为 92~183，共有 92 类。</p>
+<figure class="highlight"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">&#123;</span><br><span class="line">  <span class="attr">"segmentation"</span>: </span><br><span class="line">    &#123;<span class="attr">"counts"</span>: <span class="string">"omh51Y=0ng31PXL01O10iW10ThN1PPY2"</span>, <span class="attr">"size"</span>: [<span class="number">426</span>, <span class="number">640</span>]&#125;, </span><br><span class="line">    <span class="attr">"area"</span>: <span class="number">11.0</span>, <span class="attr">"iscrowd"</span>: <span class="number">0</span>, <span class="attr">"image_id"</span>: <span class="number">139</span>, </span><br><span class="line">    <span class="attr">"bbox"</span>: [<span class="number">444.0</span>, <span class="number">226.0</span>, <span class="number">20.0</span>, <span class="number">11.0</span>], </span><br><span class="line">    <span class="attr">"category_id"</span>: <span class="number">105</span>, <span class="attr">"id"</span>: <span class="number">20000002</span></span><br><span class="line">&#125;,</span><br></pre></td></tr></table></figure>
+
+<p><strong>Image Caption</strong></p>
+<p>没有 <code>categories</code> 字段。 <code>annotations</code> 多于 images 的个数，一张图片可以有多个描述。且只含三个信息，很简单，如下：</p>
+<figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">annotation&#123;</span><br><span class="line">    "id": &lt;int&gt;,</span><br><span class="line">    "image_id": &lt;int&gt;,</span><br><span class="line">    "caption": &lt;str&gt;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">&#123;</span><br><span class="line">  <span class="attr">"image_id"</span>: <span class="number">179765</span>,</span><br><span class="line">  <span class="attr">"id"</span>: <span class="number">38</span>,<span class="attr">"caption"</span>: <span class="string">"A black Honda motorcycle parked in front of a garage."</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+<h2 id="COCO-Panoptic-Segmentaion-的标注格式"><a href="#COCO-Panoptic-Segmentaion-的标注格式" class="headerlink" title="COCO Panoptic Segmentaion 的标注格式"></a>COCO Panoptic Segmentaion 的标注格式</h2><p>全景分割的 <code>annotations</code> 与之前的格式不一样，它将一张图片的所有 annos 储存在一个 dict 中，而不像之前一样所有图片所有 annos 平级共同储存。以下是 COCO 2017 的 <code>panoptic_val2017.json</code>。</p>
+<figure class="highlight"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br></pre></td><td class="code"><pre><span class="line">&#123;</span><br><span class="line">  "info": &#123;...&#125;,</span><br><span class="line">  "licenses": [...],</span><br><span class="line">  "images": [...],</span><br><span class="line"></span><br><span class="line">  "annotations": [</span><br><span class="line">    &#123;</span><br><span class="line">      <span class="attr">"segments_info"</span>: [</span><br><span class="line">        &#123;</span><br><span class="line">          <span class="attr">"id"</span>: <span class="number">3226956</span>,</span><br><span class="line">          <span class="attr">"category_id"</span>: <span class="number">1</span>,</span><br><span class="line">          <span class="attr">"iscrowd"</span>: <span class="number">0</span>,</span><br><span class="line">          <span class="attr">"bbox"</span>: [<span class="number">413</span>,<span class="number">158</span>,<span class="number">53</span>,<span class="number">138</span>],</span><br><span class="line">          <span class="attr">"area"</span>: <span class="number">2840</span></span><br><span class="line">        &#125;,</span><br><span class="line">        ...</span><br><span class="line">        &#123;</span><br><span class="line">          <span class="attr">"id"</span>: <span class="number">6391959</span>,</span><br><span class="line">          <span class="attr">"category_id"</span>: <span class="number">200</span>,</span><br><span class="line">          <span class="attr">"iscrowd"</span>: <span class="number">0</span>,</span><br><span class="line">          <span class="attr">"bbox"</span>: [<span class="number">135</span>,<span class="number">359</span>,<span class="number">336</span>,<span class="number">67</span>],</span><br><span class="line">          <span class="attr">"area"</span>: <span class="number">12618</span></span><br><span class="line">        &#125;</span><br><span class="line">      ],</span><br><span class="line">      <span class="attr">"file_name"</span>: <span class="string">"000000000139.png"</span>,</span><br><span class="line">      <span class="attr">"image_id"</span>: <span class="number">139</span></span><br><span class="line">    &#125;,</span><br><span class="line">    ...</span><br><span class="line">  ],</span><br><span class="line"></span><br><span class="line">  "categories": [</span><br><span class="line">    &#123;</span><br><span class="line">      <span class="attr">"supercategory"</span>: <span class="string">"person"</span>,</span><br><span class="line">      <span class="attr">"isthing"</span>: <span class="number">1</span>,</span><br><span class="line">      <span class="attr">"id"</span>: <span class="number">1</span>,</span><br><span class="line">      <span class="attr">"name"</span>: <span class="string">"person"</span></span><br><span class="line">    &#125;,</span><br><span class="line">    ...</span><br><span class="line">    &#123;</span><br><span class="line">      <span class="attr">"supercategory"</span>: <span class="string">"indoor"</span>,</span><br><span class="line">      <span class="attr">"isthing"</span>: <span class="number">1</span>,</span><br><span class="line">      <span class="attr">"id"</span>: <span class="number">90</span>,</span><br><span class="line">      <span class="attr">"name"</span>: <span class="string">"toothbrush"</span></span><br><span class="line">    &#125;,</span><br><span class="line">    &#123;</span><br><span class="line">      <span class="attr">"supercategory"</span>: <span class="string">"textile"</span>,</span><br><span class="line">      <span class="attr">"isthing"</span>: <span class="number">0</span>,</span><br><span class="line">      <span class="attr">"id"</span>: <span class="number">92</span>,</span><br><span class="line">      <span class="attr">"name"</span>: <span class="string">"banner"</span></span><br><span class="line">    &#125;,</span><br><span class="line">    ...</span><br><span class="line">    &#123;</span><br><span class="line">      <span class="attr">"supercategory"</span>: <span class="string">"window"</span>,</span><br><span class="line">      <span class="attr">"isthing"</span>: <span class="number">0</span>,</span><br><span class="line">      <span class="attr">"id"</span>: <span class="number">181</span>,</span><br><span class="line">      <span class="attr">"name"</span>: <span class="string">"window-other"</span></span><br><span class="line">    &#125;,</span><br><span class="line">    &#123;</span><br><span class="line">      <span class="attr">"supercategory"</span>: <span class="string">"plant"</span>,</span><br><span class="line">      <span class="attr">"isthing"</span>: <span class="number">0</span>,</span><br><span class="line">      <span class="attr">"id"</span>: <span class="number">184</span>,</span><br><span class="line">      <span class="attr">"name"</span>: <span class="string">"tree-merged"</span></span><br><span class="line">    &#125;,</span><br><span class="line">    ...</span><br><span class="line">    &#123;</span><br><span class="line">      <span class="attr">"supercategory"</span>: <span class="string">"textile"</span>,</span><br><span class="line">      <span class="attr">"isthing"</span>: <span class="number">0</span>,</span><br><span class="line">      <span class="attr">"id"</span>: <span class="number">200</span>,</span><br><span class="line">      <span class="attr">"name"</span>: <span class="string">"rug-merged"</span></span><br><span class="line">    &#125;</span><br><span class="line">  ]</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>因为 Panoptic 是 Non-Overlap 的，所以 segmentation 是用一张 PNG 图片储存：<code>[&quot;annotations&quot;][i][&quot;file_name&quot;]</code>。它是 class-agnostic 的，每个 segment 的 semantic information (class) 储存在 JSON：<code>[&quot;annotations&quot;][i][&quot;segments_info&quot;][j] ([id])</code>。以 RGB24 打开 PNG，如果像素值为 (0,0,0)，则表示 Unlabeled pixels (void)，其余的通过 <code>ids = R + G×256 + B×256^2</code> 即可得到 JSON 中对应的 id 值。<br><code>i</code> 表示总图片数量，<code>j</code> 表示每张图中标签的数量</p>
+<p>此外，iscrowd 只与 things 有关。thing categories 与 Detection 中的完全相同，stuff categories 与 Semantic Seg 中的有所不同。<code>categories</code> 里面多出的 <code>isthing</code> 用来区分 things 和 stuff。在 <a href="https://github.com/cocodataset/panopticapi/blob/master/panoptic_coco_categories.json" target="_blank" rel="noopener">panopticapi/panoptic_coco_categories.json</a> 中还会多出一个 <code>color: [int, int, int]</code> 表示这一类的在生成 PNG 时的颜色，对于 things，不同 instance 之间会在这个 base color 上<a href="https://github.com/cocodataset/panopticapi/blob/master/panopticapi/utils.py#L43" target="_blank" rel="noopener">抖动一点</a>，然后通过最终的 RGB 生成 JSON 里的 id。</p>
+<h1 id="COCO-Python-API"><a href="#COCO-Python-API" class="headerlink" title="COCO Python API"></a>COCO Python API</h1><p>安装 COCO Python API：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># Offical</span></span><br><span class="line">git clone https://github.com/cocodataset/cocoapi.git</span><br><span class="line">cd cocoapi/PythonAPI</span><br><span class="line">python setup.py build_ext install</span><br><span class="line"></span><br><span class="line"><span class="comment"># Or</span></span><br><span class="line">pip install pycocotools</span><br></pre></td></tr></table></figure>
+
+<p>所有的 API 可以参考 <a href="https://github.com/cocodataset/cocoapi/blob/master/PythonAPI/pycocotools/coco.py#L20" target="_blank" rel="noopener">GitHub/cocoapi-coco.py</a> 和 <a href="https://github.com/cocodataset/cocoapi/blob/master/PythonAPI/pycocotools/mask.py#L30" target="_blank" rel="noopener">GitHub/cocoapi-mask.py</a>。这里列出部分 API 使用方式。</p>
+<h2 id="获取-Annotation-信息相关-API"><a href="#获取-Annotation-信息相关-API" class="headerlink" title="获取 Annotation 信息相关 API"></a>获取 Annotation 信息相关 API</h2><p>首先读取 annotation json 文件：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">from</span> pycocotools.coco <span class="keyword">import</span> COCO</span><br><span class="line">coco = COCO(<span class="string">"path_to_GT_json_file"</span>)</span><br></pre></td></tr></table></figure>
+
+<ol>
+<li><code>img_ids = coco.getImgIds(imgIds=[], catIds=[]):</code> -&gt; list[int]<br>空参数：返回所有图片的 id：<code>[397133, 37777, 252219, 87038, 174482, 403385, 6818, 480985, 458054, 331352, ...]</code>，在 json 文件的 <code>&quot;images&quot; -&gt; &quot;id&quot;</code> 字段。<br>一个或两个参数传入 int 或 list[int]：返回同时满足所有参数中条件的所有图片（一张图片中可能有多个 Cats）</li>
+</ol>
+<ol start="2">
+<li><p><code>imgs = coco.loadImgs(img_ids)</code> -&gt; list[dict]<br>传入一个图片 id 组成的 list（或单个 int id），返回一个长度相同的 list，每个元素为一个 dict，就是 json 文件的 <code>&quot;images&quot;</code> 字段中一个/多个的 dict 组成的 list。<br>一般使用 <code>imgs = {k: v for k, v in imgs.items() if k in [&#39;id&#39;, &#39;width&#39;, &#39;height&#39;, &#39;file_name&#39;]}</code> 去除无用的信息。  </p>
+</li>
+<li><p><code>ann_ids = coco.getAnnIds(imgIds=[], catIds=[], areaRng=[], iscrowd=None)</code><br>与 <code>getImgIds()</code> 类似，返回所有 annotation 的 id，在 <code>&quot;annotations&quot; -&gt; &quot;id&quot;</code> 字段。一般传入 <code>imgIds=img_ids, iscrowd=False</code>。<br><code>areaRng</code> 传入一个 float array，代表 area 字段中的大小筛选。</p>
+</li>
+<li><p><code>cat_ids = coco.getCatIds(catNms=[], supNms=[], catIds=[])</code><br>返回所有 categories 的 id：list[int]，在这里就是 <code>[1, 2, 3, ..., 90]</code>。前两个参数是 list[string]，最后一个是 list[int] 类型。</p>
+</li>
+<li><p><code>anns = coco.loadAnns(ann_ids)</code> 和 <code>cats = coco.loadCats(cat_ids)</code><br>与 <code>loadImgs()</code> 类似，返回的就是 <code>annotations</code> 字段中一个/多个的 dict 组成的 list。注意这里都是 Python list 而不是 Numpy Array，所以不能 <code>bbox[2:] = bbox[:2] + bbox[2:]</code> 转换 xywh 为 xyxy。</p>
+</li>
+</ol>
+<h2 id="BBox-Mask-相关-API"><a href="#BBox-Mask-相关-API" class="headerlink" title="BBox/Mask 相关 API"></a>BBox/Mask 相关 API</h2><figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> pycocotools.mask <span class="keyword">as</span> mask</span><br></pre></td></tr></table></figure>
+
+<p>各种函数和它的参数及格式在代码 <a href="https://github.com/cocodataset/cocoapi/blob/master/PythonAPI/pycocotools/mask.py#L30" target="_blank" rel="noopener">GitHub/cocoapi-mask.py</a> 开头的注释已经写得比较清楚了。说明两点：</p>
+<ol>
+<li><p>里面的 Mask IoU 等计算都需要将 binary masks 转换为 encoded RLE 格式之后进行。之前 JSON 里面的 RLE 是 uncompressed RLE，由 binary masks 到它的转换之前已经介绍过了，而 encoded RLE 是 <code>bytes</code> 类型的，类似于 <code>1</code>。[hxwxn] Binary mask 可以使用 <code>mask.encode()</code> 转换为 encoded RLE，而其他的包括 uncompressed RLE 可以用 <code>mask.frPyObjects()</code> 转换。</p>
+</li>
+<li><p>例如 binary masks 等等，coco 里面的数组都是 column-major order (Fortran memory order)，调用一些 API 也要使用这种。一般的 numpy array 都是 row-major order (C memory order)，也就是数组里面的每一行内的数在内存中是相邻的，同时在 reshape 和 broadcast 等操作中 last dim 是变化最快的。使用 <code>np.ascontiguousarray()</code> 和 <code>np.asfortranarray()</code> 构造/转换数组。</p>
+</li>
+</ol>
+<h2 id="标注可视化"><a href="#标注可视化" class="headerlink" title="标注可视化"></a>标注可视化</h2><p>在 <a href="https://github.com/cocodataset/cocoapi/blob/master/PythonAPI/pycocoDemo.ipynb" target="_blank" rel="noopener">GitHub/cocoapi-pycocoDemo.ipynb</a> 中已经有了部分 anno 的图片和可视化代码。里面直接使用了 <code>coco.showAnns(anns)</code>，下面 Gist 中的代码用 Numpy/OpenCV 画出一个被分隔成两个 Polygon 的物体的 Mask，和一个 RLE 格式的 Mask。</p>
+<script src="//gist.github.com/0d398813dd3e64a72d830149c0363742.js?file=show-coco-annos.py"></script>
+
+<p><strong>Multi-Polygon Annos</strong></p>
+<p><img src="/assets/images/loading.gif" data-original="/images/coco-and-cityscapes-datasets/coco-2017val-multi-polygon-label.png" alt="Multi-Polygon Annos"></p>
+<p><strong>RLE Annos</strong></p>
+<p><img src="/assets/images/loading.gif" data-original="/images/coco-and-cityscapes-datasets/coco-2017val-rle-label.png" alt="RLE Annos"></p>
+<p>全部的可以在 COCO 官网上使用 <a href="http://cocodataset.org/#explore" target="_blank" rel="noopener">COCO Explorer</a> 搜索查看。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="/images/coco-and-cityscapes-datasets/coco-explorer.png" title="COCO Explorer" data-caption="COCO Explorer" data-fancybox="default"><img class="fig-img" src="/images/coco-and-cityscapes-datasets/coco-explorer.png" alt="COCO Explorer"></a><span class="caption">COCO Explorer</span></div><div style="clear:both;"></div>
+
+
+<h2 id="Common-Practice"><a href="#Common-Practice" class="headerlink" title="Common Practice"></a>Common Practice</h2><p>COCO 除了 crowd 通常不参与训练，需要排除，此外有一些无效的标注也需要排除，它的类别标号不是连续的，需要创建 dict 映射一下，不然 Loss 函数会不接受大于 len(logit) 的标注。这部分的代码可参考 <a href="https://github.com/facebookresearch/maskrcnn-benchmark/blob/master/maskrcnn_benchmark/data/datasets/coco.py#L40" target="_blank" rel="noopener">maskrcnn-benchmark/coco.py</a>。</p>
+<h2 id="Panoptic-API"><a href="#Panoptic-API" class="headerlink" title="Panoptic API"></a>Panoptic API</h2><p><a href="https://github.com/cocodataset/panopticapi" target="_blank" rel="noopener">https://github.com/cocodataset/panopticapi</a></p>
+<br/>
+
+
+<h1 id="CityScapes-Dataset"><a href="#CityScapes-Dataset" class="headerlink" title="CityScapes Dataset"></a>CityScapes Dataset</h1><div class="alert info"><p>数据集下载：<a href="https://www.cityscapes-dataset.com/downloads/" target="_blank" rel="noopener">https://www.cityscapes-dataset.com/downloads/</a></p>
+</div>
+
+<p>在下载界面有很多文件，在这里只需要 <code>leftImg8bit_trainvaltest.zip (11GB)</code> 和 <code>gtFine_trainvaltest.zip (241MB)</code> 即可。图像是在车上左右放了两台相机拍摄的，因此这个数据集还可以有 depth maps 和 Right Image。除了 8bit 以外，还提供 16bit HDR 图片。此外还有车的 GPS 坐标，等等很多信息，供自动驾驶等综合任务使用。extra 中是额外 19998 张粗略标注的图片（对应 <code>gtCoarse.zip (1.3GB)</code>）。对于纯粹的 Detection/Segmentation，只需要前面两个文件就足够了（3475 trainval，1525 test）。</p>
+<p>对于文件目录结构和文件名含义，可以参考 <a href="https://github.com/mcordts/cityscapesScripts" target="_blank" rel="noopener">GitHub/cityscapesScripts</a>，这个 repo 还提供一些有用的脚本，git clone 到同一目录之后（去掉 Git 自动加上的文件夹），文件如下图。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="/images/coco-and-cityscapes-datasets/cityscapes-files.png" title="CityScapes Dataset" data-caption="CityScapes Dataset" data-fancybox="default"><img class="fig-img" src="/images/coco-and-cityscapes-datasets/cityscapes-files.png" alt="CityScapes Dataset"></a><span class="caption">CityScapes Dataset</span></div><div style="clear:both;"></div>
+
+
+
+<h1 id="CityScapes-的标注格式"><a href="#CityScapes-的标注格式" class="headerlink" title="CityScapes 的标注格式"></a>CityScapes 的标注格式</h1><p>与 COCO 不同，CityScapes 的 label 储存在对应的文件夹中而不是集中在一个 JSON，每一张图片对应了 4 个 label 文件，前半部分文件名相同：</p>
+<ul>
+<li><p><code>{city}_{seq:0&gt;6}_{frame:0&gt;6}_gtFine_color.png</code><br>用于观看的彩色 label</p>
+</li>
+<li><p><code>{city}_{seq:0&gt;6}_{frame:0&gt;6}_gtFine_instanceIds.png</code><br>为 16bit png label。如果是 stuff，则像素值为 0~24 的 class ID；如果是 things，则像素值为 class ID × 1000 + X，X 为连续的自然数，例如 <code>26000, 26001, 26003</code> 可以表示图中的三辆不同的车。class ID 对应的类别名称见下一节。</p>
+</li>
+<li><p><code>{city}_{seq:0&gt;6}_{frame:0&gt;6}_gtFine_labelIds.png</code></p>
+</li>
+<li><p><code>{city}_{seq:0&gt;6}_{frame:0&gt;6}_gtFine_polygons.json</code></p>
+</li>
+</ul>
+<figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">&#123;</span><br><span class="line">  <span class="attr">"imgHeight"</span>: <span class="number">1024</span>, </span><br><span class="line">  <span class="attr">"imgWidth"</span>: <span class="number">2048</span>, </span><br><span class="line">  <span class="attr">"objects"</span>: [</span><br><span class="line">      &#123;</span><br><span class="line">        <span class="attr">"label"</span>: <span class="string">"road"</span>, </span><br><span class="line">        <span class="attr">"polygon"</span>: [</span><br><span class="line">            [</span><br><span class="line">                <span class="number">0</span>, </span><br><span class="line">                <span class="number">769</span></span><br><span class="line">            ], </span><br><span class="line">            [</span><br><span class="line">                <span class="number">290</span>, </span><br><span class="line">                <span class="number">574</span></span><br><span class="line">            ],</span><br><span class="line">            <span class="comment">// ... n polygon coordinates</span></span><br><span class="line">        ]</span><br><span class="line">      &#125;,</span><br><span class="line">      <span class="comment">// ... n objects in this image</span></span><br><span class="line">  ]</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<h1 id="cityscapesScripts"><a href="#cityscapesScripts" class="headerlink" title="cityscapesScripts"></a>cityscapesScripts</h1><p>在上面 GitHub Repo 里 Scripts 介绍内的 Most important files 中，包含了 label 的定义和转换工具，可以阅读代码开头的注释。</p>
+<h2 id="helpers-amp-preparation"><a href="#helpers-amp-preparation" class="headerlink" title="helpers &amp; preparation"></a>helpers &amp; preparation</h2><p><a href="https://github.com/mcordts/cityscapesScripts/blob/master/cityscapesscripts/helpers/labels.py" target="_blank" rel="noopener"><code>helpers/labels.py</code></a> 内定义了所有类别的 class ID，对于 <code>hasInstances = True and ignoreInEval = False</code> 的，即可以用于 Detection 的，共有 8+1 类。</p>
+<h2 id="cityscapesViewer"><a href="#cityscapesViewer" class="headerlink" title="cityscapesViewer"></a>cityscapesViewer</h2><p>这是一个使用 PyQt4 写的 GUI 预览程序，在 Windows + Anaconda 下，只需要先 <code>conda install sip</code>，然后在 <a href="https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyqt4" target="_blank" rel="noopener">https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyqt4</a> 下载编译好的 Windows PyQt4 Wheel，然后 <code>pip install</code> 安装。</p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">cd</span> CityScapse_ROOT/cityscapesscripts</span><br><span class="line">python viewer/cityscapesViewer.py</span><br></pre></td></tr></table></figure>
+
+<p>即可打开 GUI，按说明使用即可，如果报错 <code>ModuleNotFoundError: No module named &#39;cityscapesscripts&#39;</code>，那么可以在 <code>cityscapesViewer.py</code> 中加上 <code>sys.path.append(&quot;../&quot;)</code>。如果 GUI 打开之后报错路径错误，那么检查下文件目录是否是上节图中那样，或是把 CityScapes 的根目录加到 PATH 中。</p>
+<p>这个 GUI Viewer 非常好用，鼠标移到某个位置显示 label 区域和名称，载入方便迅速，工具齐全。</p>
+<div class="figure center nocaption" style="width:;"><a class="fancybox" href="/images/coco-and-cityscapes-datasets/cityscapes-viewer-1.jpg" title="Cityscapes Viewer" data-caption="Cityscapes Viewer" data-fancybox="default"><img class="fig-img" src="/images/coco-and-cityscapes-datasets/cityscapes-viewer-1.jpg" alt="Cityscapes Viewer"></a></div><div style="clear:both;"></div>
+
+<div class="figure center nocaption" style="width:;"><a class="fancybox" href="/images/coco-and-cityscapes-datasets/cityscapes-viewer-2.jpg" title="Cityscapes Viewer" data-caption="Cityscapes Viewer" data-fancybox="default"><img class="fig-img" src="/images/coco-and-cityscapes-datasets/cityscapes-viewer-2.jpg" alt="Cityscapes Viewer"></a></div><div style="clear:both;"></div>
+
+
+<h2 id="Convert-Cityscapes-Annotations-to-COCO-Format"><a href="#Convert-Cityscapes-Annotations-to-COCO-Format" class="headerlink" title="Convert Cityscapes Annotations to COCO Format"></a>Convert Cityscapes Annotations to COCO Format</h2><p>可以使用 maskrcnn-benchmark 附带的脚本：<a href="https://github.com/facebookresearch/maskrcnn-benchmark/tree/master/tools/cityscapes" target="_blank" rel="noopener">GitHub/maskrcnn-benchmark/tools/cityscapes/</a>，使用方法：<a href="https://github.com/facebookresearch/maskrcnn-benchmark/tree/master/maskrcnn_benchmark/data#steps-to-convert-cityscapes-annotations-to-coco-format" target="_blank" rel="noopener">GitHub/Steps to convert Cityscapes Annotations to COCO Format</a>。注意这里面的 gtFine 外面还有一个文件夹，跟上面不一样，或者可以修改 convert_cityscapes_to_coco.py 的 <a href="https://github.com/facebookresearch/maskrcnn-benchmark/blob/master/tools/cityscapes/convert_cityscapes_to_coco.py#L127-L130" target="_blank" rel="noopener">line127~line130</a>。</p>
+<p>此外，由于 CityScapes 数据集较小，可以使用 COCO 训练的模型作为其预训练模型，需要将 80+1 类的预测改为 10+1 类的预测，因此需要对模型进行部分改动。此外还有其他一些技巧，可参考<a href="https://github.com/facebookresearch/maskrcnn-benchmark/blob/master/configs/cityscapes/README.md" target="_blank" rel="noopener">Mask R-CNN: CityScapes</a></p>
+<br/>
+            
+
+
+        </div>
+    </div>
+    <div id="post-footer" class="post-footer main-content-wrap">
+        
+            <div class="post-footer-tags">
+                <span class="text-color-light text-small">TAGGED IN</span><br/>
+                
+    <a class="tag tag--primary tag--small t-link" href="/tags/COCO/" rel="tag">COCO</a> <a class="tag tag--primary tag--small t-link" href="/tags/CityScapes/" rel="tag">CityScapes</a> <a class="tag tag--primary tag--small t-link" href="/tags/Computer-Vision/" rel="tag">Computer Vision</a> <a class="tag tag--primary tag--small t-link" href="/tags/Datasets/" rel="tag">Datasets</a> <a class="tag tag--primary tag--small t-link" href="/tags/Deep-Learning/" rel="tag">Deep Learning</a>
+
+            </div>
+        
+        
+            <div class="post-actions-wrap">
+    <nav>
+        <ul class="post-actions post-action-nav">
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/icip-in-taiwan-sees-and-hears/"
+                    data-tooltip="ICIP 2019 于台湾之见闻"
+                    aria-label="PREVIOUS: ICIP 2019 于台湾之见闻"
+                >
+                    
+                        <i class="fa fa-angle-left" aria-hidden="true"></i>
+                        <span class="hide-xs hide-sm text-small icon-ml">PREVIOUS</span>
+                    </a>
+            </li>
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/hexo-with-github-pages-static-site/"
+                    data-tooltip="Hexo + GitHub Pages 静态网站"
+                    aria-label="NEXT: Hexo + GitHub Pages 静态网站"
+                >
+                    
+                        <span class="hide-xs hide-sm text-small icon-mr">NEXT</span>
+                        <i class="fa fa-angle-right" aria-hidden="true"></i>
+                    </a>
+            </li>
+        </ul>
+    </nav>
+    <ul class="post-actions post-action-share">
+        <li class="post-action hide-lg hide-md hide-sm">
+            <a
+                class="post-action-btn btn btn--default btn-open-shareoptions"
+                href="#btn-open-shareoptions"
+                aria-label="Share this post"
+            >
+                <i class="fa fa-share-alt" aria-hidden="true"></i>
+            </a>
+        </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/coco-and-cityscapes-datasets/"
+                    title="Share on Facebook"
+                    aria-label="Share on Facebook"
+                >
+                    <i class="fab fa-facebook" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/coco-and-cityscapes-datasets/"
+                    title="Share on Twitter"
+                    aria-label="Share on Twitter"
+                >
+                    <i class="fab fa-twitter" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/coco-and-cityscapes-datasets/"
+                    title="Share on Weibo"
+                    aria-label="Share on Weibo"
+                >
+                    <i class="fab fa-weibo" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/coco-and-cityscapes-datasets/&amp;title=COCO 和 CityScapes 数据集的标注格式和使用"
+                    title="Share on QQ"
+                    aria-label="Share on QQ"
+                >
+                    <i class="fab fa-qq" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+        
+            
+                <li class="post-action">
+                    <a
+                        class="post-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                        <i class="fa fa-comment"></i>
+                    </a>
+                </li>
+            
+        
+        <li class="post-action">
+            
+                <a class="post-action-btn btn btn--default" href="#table-of-contents" aria-label="Table of Contents">
+            
+                <i class="fa fa-list" aria-hidden="true"></i>
+            </a>
+        </li>
+    </ul>
+</div>
+
+
+        
+        
+            
+                <div id="gitalk"></div>
+
+            
+        
+    </div>
+</article>
+
+
+
+                <footer id="footer" class="main-content-wrap">
+    <span class="copyrights">
+        Copyrights &copy; 2021 Tang Huan. All Rights Reserved.
+    </span>
+</footer>
+
+            </div>
+            
+                <div id="bottom-bar" class="post-bottom-bar" data-behavior="4">
+                    <div class="post-bar-actions-wrap">
+    <div class="post-actions post-action-share">
+        <div class="post-action">
+            
+                <a class="post-bar-action-btn btn btn--default" href="#table-of-contents" aria-label="Table of Contents">
+            
+                <i class="fas fa-angle-up" aria-hidden="true"></i>
+            </a>
+        </div>
+        
+            
+                <div class="post-action">
+                    <a 
+                        class="post-bar-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                         <i class="fas fa-angle-down"></i>
+                    </a>
+                </div>
+            
+        
+    </div>
+</div>
+                </div>
+                
+    <div id="share-options-bar" class="share-options-bar" data-behavior="4">
+        <i id="btn-close-shareoptions" class="fa fa-times"></i>
+        <ul class="share-options">
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/coco-and-cityscapes-datasets/"
+                        aria-label="Share on Facebook"
+                    >
+                        <i class="fab fa-facebook" aria-hidden="true"></i><span>Share on Facebook</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/coco-and-cityscapes-datasets/"
+                        aria-label="Share on Twitter"
+                    >
+                        <i class="fab fa-twitter" aria-hidden="true"></i><span>Share on Twitter</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/coco-and-cityscapes-datasets/"
+                        aria-label="Share on Weibo"
+                    >
+                        <i class="fab fa-weibo" aria-hidden="true"></i><span>Share on Weibo</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/coco-and-cityscapes-datasets/&amp;title=COCO 和 CityScapes 数据集的标注格式和使用"
+                        aria-label="Share on QQ"
+                    >
+                        <i class="fab fa-qq" aria-hidden="true"></i><span>Share on QQ</span>
+                    </a>
+                </li>
+            
+        </ul>
+    </div>
+
+
+            
+        </div>
+        
+
+
+    
+        
+    
+
+<div id="about">
+    <div id="about-card">
+        <div id="about-btn-close">
+            <i class="fa fa-times"></i>
+        </div>
+        
+            <img id="about-card-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+            <h4 id="about-card-name">Tang Huan</h4>
+        
+            <div id="about-card-bio"></div>
+        
+        
+            <div id="about-card-job">
+                <i class="fa fa-briefcase"></i>
+                <br/>
+                
+            </div>
+        
+        
+            <div id="about-card-location">
+                <i class="fa fa-map-marker-alt"></i>
+                <br/>
+                Shanghai
+            </div>
+        
+    </div>
+</div>
+
+        
+        
+<div id="cover" style="background-image:url('/assets/images/cover.jpg');"></div>
+        
+
+<!--SCRIPTS-->
+
+<script src="/assets/js/script-21vlobaq8sfmdbypn0z91hl6jyot6shixuux8ijser2jcbktmikbwlb6yvjx.min.js"></script>
+
+<!--SCRIPTS END-->
+
+
+    
+      <script type="text/javascript">
+        (function() {
+          function render() {
+            new Gitalk({
+              clientID: 'b7b365f41dbbfaaf9b88',
+              clientSecret: '25de272b8030e3c498dd56b883e4386d881b6d62',
+              repo: 'tangh.github.io',
+              owner: 'tangh',
+              admin: ['tangh'],
+              id: 'articles/coco-and-cityscapes-datasets',
+              title: document.title.replace(' - 雨天等放晴', ''),
+              ...{"language":"en","perPage":10,"distractionFreeMode":false,"enableHotKey":true,"pagerDirection":"first","createIssueManually":true}
+            }).render('gitalk');
+          }
+          var gc = document.createElement('script');
+          gc.type = 'text/javascript';
+          gc.src = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js';
+          gc.charset = 'UTF-8';
+          gc.onload = render;
+          gc.async = true;
+          document.querySelector('body').appendChild(gc);
+          var gcs = document.createElement('link');
+          gcs.href = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.css';
+          gcs.type = 'text/css';
+          gcs.rel = 'stylesheet';
+          gcs.media = 'screen,print';
+          document.querySelector('head').appendChild(gcs);
+        })();
+      </script>
+    
+
+
+
+
+    <script>!function(e){var c=Array.prototype.slice.call(document.querySelectorAll("img[data-original]"));function i(){for(var r=0;r<c.length;r++)t=c[r],(n=t.getBoundingClientRect()).top>=-n.height&&0<=n.left&&n.top<=1.5*(e.innerHeight||document.documentElement.clientHeight)&&function(){var t,n,e,i,o=c[r];t=o,n=function(){c=c.filter(function(t){return o!==t})},e=new Image,i=t.getAttribute("data-original"),e.onload=function(){t.src=i,n&&n()},e.src=i}();var t,n}i(),e.addEventListener("scroll",function(){var t,n;t=i,n=e,clearTimeout(t.tId),t.tId=setTimeout(function(){t.call(n)},500)})}(this);</script><!-- hexo-inject:begin --><!-- hexo-inject:end --></body>
+</html>

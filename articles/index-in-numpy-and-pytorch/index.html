@@ -1,0 +1,728 @@
+
+<!DOCTYPE html>
+
+    <html lang="zh-Hans-CN">
+
+    
+<head>
+    <!-- hexo-inject:begin --><!-- hexo-inject:end --><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="generator" content="雨天等放晴">
+    <title>Numpy 和 PyTorch 中的索引 - 雨天等放晴</title>
+    <meta name="author" content="Tang Huan">
+    
+        <meta name="keywords" content="Numpy,PyTorch,Index,Python">
+    
+    
+        <link rel="icon" href="https://tangh.github.io/assets/images/favicon.png">
+    
+    
+        <link rel="apple-touch-icon" sizes="180x180" href="https://tangh.github.io/assets/images/apple-touch-icon.png">
+    
+    
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg"},"articleBody":"\n\n\n\n使用整型 list/array/tensor 进行索引索引类型可以是 int list、int_? ndarray（任意 numpy int 类型）、long torch.tensor (int64)。大多数函数返回的都是这种类型，例如 torch.topk()、np.where() 等。\n\n基本使用，单个数组的 index：返回一个跟 index 形状相同的数组，从 a 的 first dim 上取对应位置的数据\n\n12345678&gt;&gt;&gt; a = torch.arange(9) ** 2&gt;&gt;&gt; a    tensor([ 0,  1,  4,  9, 16, 25, 36, 49, 64])&gt;&gt;&gt; index = torch.tensor([1,3,1,5,8], dtype=torch.long)&gt;&gt;&gt; index    tensor([1, 3, 1, 5, 8])&gt;&gt;&gt; a[index]    tensor([ 1,  9,  1, 25, 64])\n\n索引数组中可以有重复值\n\n上述情况下 a.dim() != index.dim() 时同理，只要求 max(index) &lt;= len(a)\n\n12345678910111213141516&gt;&gt;&gt; index = torch.tensor([[8,1], [2,1]], dtype=torch.long)&gt;&gt;&gt; index    tensor([[8, 1],            [2, 1]])&gt;&gt;&gt; a[index]    tensor([[64,  1],            [ 4,  1]])&gt;&gt;&gt; a = a.view(3, 3)&gt;&gt;&gt; index = torch.tensor([2,0])&gt;&gt;&gt; a[index]    tensor([[6, 7, 8],            [0, 1, 2]])&gt;&gt;&gt; index = torch.tensor([5,0])&gt;&gt;&gt; a[index]    RuntimeError: \"index 5 is out of bounds for dim with size 3\"\n\n\n多个数组的索引\n\n12345678910&gt;&gt;&gt; a = torch.arange(12).view(3,4)&gt;&gt;&gt; a    tensor([[ 0,  1,  2,  3],            [ 4,  5,  6,  7],            [ 8,  9, 10, 11]])&gt;&gt;&gt; i = torch.tensor([[0,1], [1,2]])&gt;&gt;&gt; j = torch.tensor([[2,1], [3,3]])&gt;&gt;&gt; a[i, j]    tensor([[ 2,  5],            [ 7, 11]])\n\na[i,j] 的机制是数组 i 和数组 j 相同位置的对应数字两两组成一对索引，然后用这对索引在 a 中进行取值。比如 i[0,0] == 0, j[0,0] == 2，它们组成的索引对是 (0,2)，在数组 a 中对应的值 a[0,2] == 2。\n\n上述情况下，i.shape != j.shape 时，会先进行 broadcast\n\n1234&gt;&gt;&gt; j = torch.tensor([2,1])&gt;&gt;&gt; a[i,j]    tensor([[2, 5],            [6, 9]])\n\nshape 较小的先 broadcast 到较大的 shape，j -&gt; [[2,1], [2,1]]。具体可参考 PYTORCH BROADCASTING SEMANTICS。\n\n    \n        i        \n        j        \n        index        \n    \n    \n        0\n        1\n        2\n        1\n        [0, 2]\n        [1, 1]\n    \n    \n        1\n        2\n        2\n        1\n        [1, 2]\n        [1, 1]\n    \n\n\n\n切片\n\n123456&gt;&gt;&gt; a = torch.arange(12).view(3,4)&gt;&gt;&gt; a    tensor([[ 0,  1,  2,  3],            [ 4,  5,  6,  7],            [ 8,  9, 10, 11]])&gt;&gt;&gt; i = torch.tensor([[0,1], [1,2]])\n\n如 result = a[i, :] 则是在 i.shape = (2, 2) 的 2×2 数组的每个位置内，放入 i 相同位置的元素在 a 中索引出的值（a 的行 i 的所有列元素 :），结果 result.shape = (2, 2, 4)。\n\n赋值（In-place）\n\n如果索引列表有重复值，赋值的话也会多次赋值，以最后一次赋值为准。但如果使用 Python 的 += 运算，只会自增一次。\n12345678&gt;&gt;&gt; a = torch.arange(5)&gt;&gt;&gt; a[[0,0,2]] = torch.tensor([1,2,3])&gt;&gt;&gt; a    tensor([2, 1, 3, 3, 4])&gt;&gt;&gt; a[[0,0,2]] += 1&gt;&gt;&gt; a    tensor([3, 1, 4, 3, 4])\n\n\n\n使用布尔 list/array/tensor 进行索引索引类型可以是 bool list、bool np.array、byte torch.tensor（uint8）。&gt;、== 等操作返回的是这种类型。\n比较简单，如果是 True/1 就表示选中，False/0 表示不选中。\n12345&gt;&gt;&gt; a = np.arange(12).reshape(3,4)&gt;&gt;&gt; index = np.array([False,True,True])&gt;&gt;&gt; a[index, :]    array([[ 4,  5,  6,  7],           [ 8,  9, 10, 11]])","dateCreated":"2018-07-26T00:00:00+08:00","dateModified":"2021-05-24T01:28:51+08:00","datePublished":"2018-07-26T00:00:00+08:00","description":"Numpy 和 PyTorch 中的各种索引操作的过程和结果。","headline":"Numpy 和 PyTorch 中的索引","image":[],"mainEntityOfPage":{"@type":"WebPage","@id":"https://tangh.github.io/articles/index-in-numpy-and-pytorch/"},"publisher":{"@type":"Organization","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg","logo":{"@type":"ImageObject","url":"icon.jpg"}},"url":"https://tangh.github.io/articles/index-in-numpy-and-pytorch/","keywords":"Python, Numpy, PyTorch"}</script>
+    <meta name="description" content="Numpy 和 PyTorch 中的各种索引操作的过程和结果。">
+<meta property="og:type" content="blog">
+<meta property="og:title" content="Numpy 和 PyTorch 中的索引">
+<meta property="og:url" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;articles&#x2F;index-in-numpy-and-pytorch&#x2F;">
+<meta property="og:site_name" content="雨天等放晴">
+<meta property="og:description" content="Numpy 和 PyTorch 中的各种索引操作的过程和结果。">
+<meta property="og:locale" content="en_US">
+<meta property="article:published_time" content="2018-07-25T16:00:00.000Z">
+<meta property="article:modified_time" content="2021-05-23T17:28:51.050Z">
+<meta property="article:author" content="Tang Huan">
+<meta property="article:tag" content="Numpy">
+<meta property="article:tag" content="PyTorch">
+<meta property="article:tag" content="Index">
+<meta property="article:tag" content="Python">
+<meta name="twitter:card" content="summary">
+    
+    
+        
+    
+    
+        <meta property="og:image" content="https://tangh.github.io/assets/images/icon.jpg"/>
+    
+    
+    
+    
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
+    <!--STYLES-->
+    
+<link rel="stylesheet" href="/assets/css/style-iaetwm81hfopcuajcp7qnh2zsnqn4dhiu3nftuj79wdhe7fie6l4r0thrs6g.min.css">
+
+    <!--STYLES END-->
+    
+    <script async src="https://www.googletagmanager.com/gtag/js?id=UA-137837052-1"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'UA-137837052-1');
+    </script><!-- hexo-inject:begin --><!-- hexo-inject:end -->
+
+
+    
+
+</head>
+
+    <body>
+        <!-- hexo-inject:begin --><!-- hexo-inject:end --><div id="blog">
+            <!-- Define author's picture -->
+
+
+    
+        
+            
+        
+    
+
+<header id="header" data-behavior="4">
+    <i id="btn-open-sidebar" class="fa fa-lg fa-bars"></i>
+    <div class="header-title">
+        <a
+            class="header-title-link"
+            href="/"
+            aria-label=""
+        >
+            雨天等放晴
+        </a>
+    </div>
+    
+        
+            <a
+                class="header-right-picture "
+                href="#about"
+                aria-label="Open the link: /#about"
+            >
+        
+        
+            <img class="header-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+        </a>
+    
+</header>
+
+            <!-- Define author's picture -->
+
+
+
+        
+    
+
+<nav id="sidebar" data-behavior="4">
+    <div class="sidebar-container">
+        
+            <div class="sidebar-profile">
+                <a
+                    href="/#about"
+                    aria-label="Read more about the author"
+                >
+                    <img class="sidebar-profile-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+                </a>
+                <h4 class="sidebar-profile-name">Tang Huan</h4>
+                
+                    <h5 class="sidebar-profile-bio"></h5>
+                
+            </div>
+        
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/"
+                            
+                            rel="noopener"
+                            title="Home"
+                        >
+                        <i class="sidebar-button-icon fa fa-home" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Home</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-categories"
+                            
+                            rel="noopener"
+                            title="Categories"
+                        >
+                        <i class="sidebar-button-icon fa fa-bookmark" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Categories</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-tags"
+                            
+                            rel="noopener"
+                            title="Tags"
+                        >
+                        <i class="sidebar-button-icon fa fa-tags" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Tags</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-archives"
+                            
+                            rel="noopener"
+                            title="Archives"
+                        >
+                        <i class="sidebar-button-icon fa fa-archive" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Archives</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/about"
+                            
+                            rel="noopener"
+                            title="About"
+                        >
+                        <i class="sidebar-button-icon fas fa-cube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">About</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://twitter.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Twitter"
+                        >
+                        <i class="sidebar-button-icon fab fa-twitter" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Twitter</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.flickr.com/photos/135277712@N07/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Flickr"
+                        >
+                        <i class="sidebar-button-icon fab fa-flickr" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Flickr</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.instagram.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Instagram"
+                        >
+                        <i class="sidebar-button-icon fab fa-instagram" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Instagram</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="YouTube"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">YouTube</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://space.bilibili.com/634428/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="BiliBili"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube-square" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">BiliBili</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+    </div>
+</nav>
+
+            
+            <div id="main" data-behavior="4"
+                 class="
+                        hasCoverMetaIn
+                        ">
+                
+<article class="post">
+    
+    
+        <div class="post-header main-content-wrap text-center">
+    
+        <h1 class="post-title">
+            Numpy 和 PyTorch 中的索引
+        </h1>
+    
+    
+        <div class="post-meta">
+    <time datetime="2018-07-26T00:00:00+08:00">
+	
+		    Jul 26, 2018
+    	
+    </time>
+    
+        <span>in </span>
+        
+    <a class="category-link" href="/categories/Computer-Science/">Computer Science</a>, <a class="category-link" href="/categories/Computer-Science/Python/">Python</a>
+
+
+    
+</div>
+
+    
+</div>
+
+    
+    
+        <div class="post-content markdown">
+    
+        <div class="main-content-wrap">
+            <!-- excerpt -->
+
+
+
+<h1 id="使用整型-list-array-tensor-进行索引"><a href="#使用整型-list-array-tensor-进行索引" class="headerlink" title="使用整型 list/array/tensor 进行索引"></a>使用整型 list/array/tensor 进行索引</h1><p>索引类型可以是 <code>int list</code>、<code>int_? ndarray</code>（任意 <code>numpy int</code> 类型）、<code>long torch.tensor (int64)</code>。大多数函数返回的都是这种类型，例如 <code>torch.topk()</code>、<code>np.where()</code> 等。</p>
+<ol>
+<li>基本使用，单个数组的 index：返回一个跟 index 形状相同的数组，从 a 的 first dim 上取对应位置的数据</li>
+</ol>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">&gt;&gt;&gt; </span>a = torch.arange(<span class="number">9</span>) ** <span class="number">2</span></span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a</span><br><span class="line">    tensor([ <span class="number">0</span>,  <span class="number">1</span>,  <span class="number">4</span>,  <span class="number">9</span>, <span class="number">16</span>, <span class="number">25</span>, <span class="number">36</span>, <span class="number">49</span>, <span class="number">64</span>])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>index = torch.tensor([<span class="number">1</span>,<span class="number">3</span>,<span class="number">1</span>,<span class="number">5</span>,<span class="number">8</span>], dtype=torch.long)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>index</span><br><span class="line">    tensor([<span class="number">1</span>, <span class="number">3</span>, <span class="number">1</span>, <span class="number">5</span>, <span class="number">8</span>])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a[index]</span><br><span class="line">    tensor([ <span class="number">1</span>,  <span class="number">9</span>,  <span class="number">1</span>, <span class="number">25</span>, <span class="number">64</span>])</span><br></pre></td></tr></table></figure>
+
+<p>索引数组中可以有重复值</p>
+<ol start="2">
+<li>上述情况下 <code>a.dim() != index.dim()</code> 时同理，只要求 <code>max(index) &lt;= len(a)</code></li>
+</ol>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">&gt;&gt;&gt; </span>index = torch.tensor([[<span class="number">8</span>,<span class="number">1</span>], [<span class="number">2</span>,<span class="number">1</span>]], dtype=torch.long)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>index</span><br><span class="line">    tensor([[<span class="number">8</span>, <span class="number">1</span>],</span><br><span class="line">            [<span class="number">2</span>, <span class="number">1</span>]])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a[index]</span><br><span class="line">    tensor([[<span class="number">64</span>,  <span class="number">1</span>],</span><br><span class="line">            [ <span class="number">4</span>,  <span class="number">1</span>]])</span><br><span class="line"></span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a = a.view(<span class="number">3</span>, <span class="number">3</span>)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>index = torch.tensor([<span class="number">2</span>,<span class="number">0</span>])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a[index]</span><br><span class="line">    tensor([[<span class="number">6</span>, <span class="number">7</span>, <span class="number">8</span>],</span><br><span class="line">            [<span class="number">0</span>, <span class="number">1</span>, <span class="number">2</span>]])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>index = torch.tensor([<span class="number">5</span>,<span class="number">0</span>])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a[index]</span><br><span class="line">    RuntimeError: <span class="string">"index 5 is out of bounds for dim with size 3"</span></span><br></pre></td></tr></table></figure>
+
+<ol start="3">
+<li>多个数组的索引</li>
+</ol>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">&gt;&gt;&gt; </span>a = torch.arange(<span class="number">12</span>).view(<span class="number">3</span>,<span class="number">4</span>)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a</span><br><span class="line">    tensor([[ <span class="number">0</span>,  <span class="number">1</span>,  <span class="number">2</span>,  <span class="number">3</span>],</span><br><span class="line">            [ <span class="number">4</span>,  <span class="number">5</span>,  <span class="number">6</span>,  <span class="number">7</span>],</span><br><span class="line">            [ <span class="number">8</span>,  <span class="number">9</span>, <span class="number">10</span>, <span class="number">11</span>]])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>i = torch.tensor([[<span class="number">0</span>,<span class="number">1</span>], [<span class="number">1</span>,<span class="number">2</span>]])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>j = torch.tensor([[<span class="number">2</span>,<span class="number">1</span>], [<span class="number">3</span>,<span class="number">3</span>]])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a[i, j]</span><br><span class="line">    tensor([[ <span class="number">2</span>,  <span class="number">5</span>],</span><br><span class="line">            [ <span class="number">7</span>, <span class="number">11</span>]])</span><br></pre></td></tr></table></figure>
+
+<p><code>a[i,j]</code> 的机制是数组 i 和数组 j 相同位置的对应数字两两组成一对索引，然后用这对索引在 a 中进行取值。比如 <code>i[0,0] == 0, j[0,0] == 2</code>，它们组成的索引对是 (0,2)，在数组 a 中对应的值 <code>a[0,2] == 2</code>。</p>
+<ol start="4">
+<li>上述情况下，<code>i.shape != j.shape</code> 时，会先进行 broadcast</li>
+</ol>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">&gt;&gt;&gt; </span>j = torch.tensor([<span class="number">2</span>,<span class="number">1</span>])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a[i,j]</span><br><span class="line">    tensor([[<span class="number">2</span>, <span class="number">5</span>],</span><br><span class="line">            [<span class="number">6</span>, <span class="number">9</span>]])</span><br></pre></td></tr></table></figure>
+
+<p>shape 较小的先 broadcast 到较大的 shape，<code>j -&gt; [[2,1], [2,1]]</code>。具体可参考 <a href="https://pytorch.org/docs/stable/notes/broadcasting.html" target="_blank" rel="noopener">PYTORCH BROADCASTING SEMANTICS</a>。</p>
+<table border="1" style="text-align:center;">
+    <tr>
+        <th colspan="2">i</th>        
+        <th colspan="2">j</th>        
+        <th colspan="4">index</th>        
+    </tr>
+    <tr>
+        <td>0</td>
+        <td>1</td>
+        <td>2</td>
+        <td>1</td>
+        <td colspan="2">[0, 2]</td>
+        <td colspan="2">[1, 1]</td>
+    </tr>
+    <tr>
+        <td>1</td>
+        <td>2</td>
+        <td>2</td>
+        <td>1</td>
+        <td colspan="2">[1, 2]</td>
+        <td colspan="2">[1, 1]</td>
+    </tr>
+</table>
+
+<ol start="5">
+<li>切片</li>
+</ol>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">&gt;&gt;&gt; </span>a = torch.arange(<span class="number">12</span>).view(<span class="number">3</span>,<span class="number">4</span>)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a</span><br><span class="line">    tensor([[ <span class="number">0</span>,  <span class="number">1</span>,  <span class="number">2</span>,  <span class="number">3</span>],</span><br><span class="line">            [ <span class="number">4</span>,  <span class="number">5</span>,  <span class="number">6</span>,  <span class="number">7</span>],</span><br><span class="line">            [ <span class="number">8</span>,  <span class="number">9</span>, <span class="number">10</span>, <span class="number">11</span>]])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>i = torch.tensor([[<span class="number">0</span>,<span class="number">1</span>], [<span class="number">1</span>,<span class="number">2</span>]])</span><br></pre></td></tr></table></figure>
+
+<p>如 <code>result = a[i, :]</code> 则是在 <code>i.shape = (2, 2)</code> 的 2×2 数组的每个位置内，放入 <code>i</code> 相同位置的元素在 <code>a</code> 中索引出的值（<code>a</code> 的行 <code>i</code> 的所有列元素 <code>:</code>），结果 <code>result.shape = (2, 2, 4)</code>。</p>
+<ol start="6">
+<li>赋值（In-place）</li>
+</ol>
+<p>如果索引列表有重复值，赋值的话也会多次赋值，以最后一次赋值为准。但如果使用 Python 的 <code>+=</code> 运算，只会自增一次。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">&gt;&gt;&gt; </span>a = torch.arange(<span class="number">5</span>)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a[[<span class="number">0</span>,<span class="number">0</span>,<span class="number">2</span>]] = torch.tensor([<span class="number">1</span>,<span class="number">2</span>,<span class="number">3</span>])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a</span><br><span class="line">    tensor([<span class="number">2</span>, <span class="number">1</span>, <span class="number">3</span>, <span class="number">3</span>, <span class="number">4</span>])</span><br><span class="line"></span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a[[<span class="number">0</span>,<span class="number">0</span>,<span class="number">2</span>]] += <span class="number">1</span></span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a</span><br><span class="line">    tensor([<span class="number">3</span>, <span class="number">1</span>, <span class="number">4</span>, <span class="number">3</span>, <span class="number">4</span>])</span><br></pre></td></tr></table></figure>
+
+
+
+<h1 id="使用布尔-list-array-tensor-进行索引"><a href="#使用布尔-list-array-tensor-进行索引" class="headerlink" title="使用布尔 list/array/tensor 进行索引"></a>使用布尔 list/array/tensor 进行索引</h1><p>索引类型可以是 bool list、bool np.array、byte torch.tensor（uint8）。<code>&gt;</code>、<code>==</code> 等操作返回的是这种类型。</p>
+<p>比较简单，如果是 <code>True/1</code> 就表示选中，<code>False/0</code> 表示不选中。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">&gt;&gt;&gt; </span>a = np.arange(<span class="number">12</span>).reshape(<span class="number">3</span>,<span class="number">4</span>)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>index = np.array([<span class="literal">False</span>,<span class="literal">True</span>,<span class="literal">True</span>])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a[index, :]</span><br><span class="line">    array([[ <span class="number">4</span>,  <span class="number">5</span>,  <span class="number">6</span>,  <span class="number">7</span>],</span><br><span class="line">           [ <span class="number">8</span>,  <span class="number">9</span>, <span class="number">10</span>, <span class="number">11</span>]])</span><br></pre></td></tr></table></figure>
+            
+
+
+        </div>
+    </div>
+    <div id="post-footer" class="post-footer main-content-wrap">
+        
+            <div class="post-footer-tags">
+                <span class="text-color-light text-small">TAGGED IN</span><br/>
+                
+    <a class="tag tag--primary tag--small t-link" href="/tags/Numpy/" rel="tag">Numpy</a> <a class="tag tag--primary tag--small t-link" href="/tags/PyTorch/" rel="tag">PyTorch</a> <a class="tag tag--primary tag--small t-link" href="/tags/Python/" rel="tag">Python</a>
+
+            </div>
+        
+        
+            <div class="post-actions-wrap">
+    <nav>
+        <ul class="post-actions post-action-nav">
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/hajimemashite-fujisan/"
+                    data-tooltip="初次见面，富士山"
+                    aria-label="PREVIOUS: 初次见面，富士山"
+                >
+                    
+                        <i class="fa fa-angle-left" aria-hidden="true"></i>
+                        <span class="hide-xs hide-sm text-small icon-ml">PREVIOUS</span>
+                    </a>
+            </li>
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/western-united-states/"
+                    data-tooltip="在长长的暑假去了美国"
+                    aria-label="NEXT: 在长长的暑假去了美国"
+                >
+                    
+                        <span class="hide-xs hide-sm text-small icon-mr">NEXT</span>
+                        <i class="fa fa-angle-right" aria-hidden="true"></i>
+                    </a>
+            </li>
+        </ul>
+    </nav>
+    <ul class="post-actions post-action-share">
+        <li class="post-action hide-lg hide-md hide-sm">
+            <a
+                class="post-action-btn btn btn--default btn-open-shareoptions"
+                href="#btn-open-shareoptions"
+                aria-label="Share this post"
+            >
+                <i class="fa fa-share-alt" aria-hidden="true"></i>
+            </a>
+        </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/index-in-numpy-and-pytorch/"
+                    title="Share on Facebook"
+                    aria-label="Share on Facebook"
+                >
+                    <i class="fab fa-facebook" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/index-in-numpy-and-pytorch/"
+                    title="Share on Twitter"
+                    aria-label="Share on Twitter"
+                >
+                    <i class="fab fa-twitter" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/index-in-numpy-and-pytorch/"
+                    title="Share on Weibo"
+                    aria-label="Share on Weibo"
+                >
+                    <i class="fab fa-weibo" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/index-in-numpy-and-pytorch/&amp;title=Numpy 和 PyTorch 中的索引"
+                    title="Share on QQ"
+                    aria-label="Share on QQ"
+                >
+                    <i class="fab fa-qq" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+        
+            
+                <li class="post-action">
+                    <a
+                        class="post-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                        <i class="fa fa-comment"></i>
+                    </a>
+                </li>
+            
+        
+        <li class="post-action">
+            
+                <a class="post-action-btn btn btn--default" href="#" aria-label="Back to top">
+            
+                <i class="fa fa-list" aria-hidden="true"></i>
+            </a>
+        </li>
+    </ul>
+</div>
+
+
+        
+        
+            
+                <div id="gitalk"></div>
+
+            
+        
+    </div>
+</article>
+
+
+
+                <footer id="footer" class="main-content-wrap">
+    <span class="copyrights">
+        Copyrights &copy; 2021 Tang Huan. All Rights Reserved.
+    </span>
+</footer>
+
+            </div>
+            
+                <div id="bottom-bar" class="post-bottom-bar" data-behavior="4">
+                    <div class="post-bar-actions-wrap">
+    <div class="post-actions post-action-share">
+        <div class="post-action">
+            
+                <a class="post-bar-action-btn btn btn--default" href="#" aria-label="Back to top">
+            
+                <i class="fas fa-angle-up" aria-hidden="true"></i>
+            </a>
+        </div>
+        
+            
+                <div class="post-action">
+                    <a 
+                        class="post-bar-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                         <i class="fas fa-angle-down"></i>
+                    </a>
+                </div>
+            
+        
+    </div>
+</div>
+                </div>
+                
+    <div id="share-options-bar" class="share-options-bar" data-behavior="4">
+        <i id="btn-close-shareoptions" class="fa fa-times"></i>
+        <ul class="share-options">
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/index-in-numpy-and-pytorch/"
+                        aria-label="Share on Facebook"
+                    >
+                        <i class="fab fa-facebook" aria-hidden="true"></i><span>Share on Facebook</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/index-in-numpy-and-pytorch/"
+                        aria-label="Share on Twitter"
+                    >
+                        <i class="fab fa-twitter" aria-hidden="true"></i><span>Share on Twitter</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/index-in-numpy-and-pytorch/"
+                        aria-label="Share on Weibo"
+                    >
+                        <i class="fab fa-weibo" aria-hidden="true"></i><span>Share on Weibo</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/index-in-numpy-and-pytorch/&amp;title=Numpy 和 PyTorch 中的索引"
+                        aria-label="Share on QQ"
+                    >
+                        <i class="fab fa-qq" aria-hidden="true"></i><span>Share on QQ</span>
+                    </a>
+                </li>
+            
+        </ul>
+    </div>
+
+
+            
+        </div>
+        
+
+
+    
+        
+    
+
+<div id="about">
+    <div id="about-card">
+        <div id="about-btn-close">
+            <i class="fa fa-times"></i>
+        </div>
+        
+            <img id="about-card-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+            <h4 id="about-card-name">Tang Huan</h4>
+        
+            <div id="about-card-bio"></div>
+        
+        
+            <div id="about-card-job">
+                <i class="fa fa-briefcase"></i>
+                <br/>
+                
+            </div>
+        
+        
+            <div id="about-card-location">
+                <i class="fa fa-map-marker-alt"></i>
+                <br/>
+                Shanghai
+            </div>
+        
+    </div>
+</div>
+
+        
+        
+<div id="cover" style="background-image:url('/assets/images/cover.jpg');"></div>
+        
+
+<!--SCRIPTS-->
+
+<script src="/assets/js/script-21vlobaq8sfmdbypn0z91hl6jyot6shixuux8ijser2jcbktmikbwlb6yvjx.min.js"></script>
+
+<!--SCRIPTS END-->
+
+
+    
+      <script type="text/javascript">
+        (function() {
+          function render() {
+            new Gitalk({
+              clientID: 'b7b365f41dbbfaaf9b88',
+              clientSecret: '25de272b8030e3c498dd56b883e4386d881b6d62',
+              repo: 'tangh.github.io',
+              owner: 'tangh',
+              admin: ['tangh'],
+              id: 'articles/index-in-numpy-and-pytorch',
+              title: document.title.replace(' - 雨天等放晴', ''),
+              ...{"language":"en","perPage":10,"distractionFreeMode":false,"enableHotKey":true,"pagerDirection":"first","createIssueManually":true}
+            }).render('gitalk');
+          }
+          var gc = document.createElement('script');
+          gc.type = 'text/javascript';
+          gc.src = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js';
+          gc.charset = 'UTF-8';
+          gc.onload = render;
+          gc.async = true;
+          document.querySelector('body').appendChild(gc);
+          var gcs = document.createElement('link');
+          gcs.href = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.css';
+          gcs.type = 'text/css';
+          gcs.rel = 'stylesheet';
+          gcs.media = 'screen,print';
+          document.querySelector('head').appendChild(gcs);
+        })();
+      </script>
+    
+
+
+
+
+    <script>!function(e){var c=Array.prototype.slice.call(document.querySelectorAll("img[data-original]"));function i(){for(var r=0;r<c.length;r++)t=c[r],(n=t.getBoundingClientRect()).top>=-n.height&&0<=n.left&&n.top<=1.5*(e.innerHeight||document.documentElement.clientHeight)&&function(){var t,n,e,i,o=c[r];t=o,n=function(){c=c.filter(function(t){return o!==t})},e=new Image,i=t.getAttribute("data-original"),e.onload=function(){t.src=i,n&&n()},e.src=i}();var t,n}i(),e.addEventListener("scroll",function(){var t,n;t=i,n=e,clearTimeout(t.tId),t.tId=setTimeout(function(){t.call(n)},500)})}(this);</script><!-- hexo-inject:begin --><!-- hexo-inject:end --></body>
+</html>

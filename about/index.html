@@ -1,0 +1,469 @@
+
+<!DOCTYPE html>
+
+    <html lang="zh-Hans-CN">
+
+    
+<head>
+    <!-- hexo-inject:begin --><!-- hexo-inject:end --><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="generator" content="雨天等放晴">
+    <title>关于我和这个网站 - 雨天等放晴</title>
+    <meta name="author" content="Tang Huan">
+    
+        <meta name="keywords" content="About">
+    
+    
+        <link rel="icon" href="https://tangh.github.io/assets/images/favicon.png">
+    
+    
+        <link rel="apple-touch-icon" sizes="180x180" href="https://tangh.github.io/assets/images/apple-touch-icon.png">
+    
+    
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg"},"articleBody":"\n\n上次更新：2020-03-31\n\n\n这个网站是基于 GitHub Pages 和 Hexo 的，所有的照片视频储存在 Amazon S3 和 OneDrive，其他图片等储存在 GitHub。虽然都有 CDN 分发，但是在朝鲜和其他地区仍可能访问缓慢。此外，会有 YouTube、GoogleMaps、Flickr 之类的链接，上述地区需要代理。\n之前的内容有时候会更新，但是这个网站没有一个自动 tag 最后修改日期的功能，我暂时也没打算手动加上。\n我已經盡可能地縮減在 GitHub 上儲存的包括背景圖片在內的所有圖片的文件大小了，並且幾乎所有字體和第三方 CSS 都使用 jsdelivr 分發了，但是我試了下在一些地區和條件下仍有時訪問緩慢，TTFB 巨長，無能為力。而且 Safari 非常執著於將所有元素全部載入才顯示頁面，Chrome 會覺得背景圖可以慢慢載入先把其他顯示出來。。\n\napple-touch-icon 来自 Pixiv / 卯月つくよ\n\n\n這個 Blog 之後我應該會使用繁體漢字寫一些內容，反正我用拼音，也沒什麼本質差異。我倒是覺得繁體好看一點，當然，對於筆畫特別多的字，我也會採用合適的簡化字（主要是異體字兼簡體字）替換，不然太小影響閱讀。文字嘛，注重內容，少點「規範」和優越感。另外，我喜歡傳統明體的寫法，所以我會用日語的思源宋體作為首選。\n2019-05-26今年想多出去走走，下个月会去 🇩🇪，9 月底会去台北，国庆未知，感觉没什么 💴 了，很惨。想看看秋天的京都和冬天的北海道。其实还有挺多想去的地方的，随便列一下吧，看着就会是有钱的时候没时间、有时间的时候没钱了：冰岛（想看极光草帽山）、夏威夷（想看 Mauna Kea）、瑞士（想去冬季的马特洪峰和玩春季的山地过山车）、英国（没啥特别想去的地方，如果非要说就是中部地区图灵破解 Enigma 的那个博物馆）、新疆（果子沟好像很有意思）、阿根廷/智利（巴塔哥尼亚的秋）、美国黄石和冰川国家公园（Ansel Adams 在 Snake River 那的神作）、新西兰（感觉羊驼好多，🐏很有意思）……\n\n网站更新：\n2020-03-31更新了一票东西，比如加入了语言自定，支持了繁体字体，尽量改为 CDN 分发资源，还解决好几个 bug。总之把一年前遗留的问题解决了，现在应该没有已知问题了。\n2019-05-26把图片搬迁到 OneDrive 了，还是寻求一个免费吧。。不过我用了一个 json 存下所有的链接对应的文件名，以后要是有更好的方案了方便写个脚本直接迁移。\n2019-04-05最近进入了一个新的阶段，然后上周末和今天花了三天来彻底把这个网站改成了我之前希望的样子，加上了诸如页内跳转的动画、思源宋体支持、懒加载图片、简化的回到目录按钮等等，还有一些排版上的比如对齐、字符段落间距、字号等等。其实我还是非常关注设计美学的，尽管我的「专业」跟这个毫不相关，当然如何让网页看上去美观也是很重要的事。遗憾就是，我觉得 2019 的网页应该是会有一些载入动画和加载提示的，以及应该使用 PJAX。但是我目前都还没有好好系统学过 JavaScript，尝试了挺久，很多东西还是没能力实现，就此作罢，已经花了不少时间。","dateCreated":"2017-06-23T00:00:00+08:00","dateModified":"2021-05-24T01:28:51+08:00","datePublished":"2017-06-23T00:00:00+08:00","description":"上次更新：2020-03-31","headline":"关于我和这个网站","image":["https://tangh.github.io/images/thumbnails/about.png"],"mainEntityOfPage":{"@type":"WebPage","@id":"https://tangh.github.io/about/"},"publisher":{"@type":"Organization","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg","logo":{"@type":"ImageObject","url":"icon.jpg"}},"url":"https://tangh.github.io/about/","keywords":"About","thumbnailUrl":"https://tangh.github.io/images/thumbnails/about.png"}</script>
+    <meta name="description" content="上次更新：2020-03-31">
+<meta property="og:type" content="blog">
+<meta property="og:title" content="关于我和这个网站">
+<meta property="og:url" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;about&#x2F;">
+<meta property="og:site_name" content="雨天等放晴">
+<meta property="og:description" content="上次更新：2020-03-31">
+<meta property="og:locale" content="en_US">
+<meta property="article:published_time" content="2017-06-22T16:00:00.000Z">
+<meta property="article:modified_time" content="2021-05-23T17:28:51.054Z">
+<meta property="article:author" content="Tang Huan">
+<meta property="article:tag" content="About">
+<meta name="twitter:card" content="summary">
+    
+    
+        
+    
+    
+        <meta property="og:image" content="https://tangh.github.io/assets/images/icon.jpg"/>
+    
+    
+        <meta property="og:image" content="https://tangh.github.io/images/thumbnails/about.png"/>
+        <meta class="swiftype" name="image" data-type="enum" content="https://tangh.github.io/images/thumbnails/about.png"/>
+    
+    
+    
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
+    <!--STYLES-->
+    
+<link rel="stylesheet" href="/assets/css/style-iaetwm81hfopcuajcp7qnh2zsnqn4dhiu3nftuj79wdhe7fie6l4r0thrs6g.min.css">
+
+    <!--STYLES END-->
+    
+    <script async src="https://www.googletagmanager.com/gtag/js?id=UA-137837052-1"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'UA-137837052-1');
+    </script><!-- hexo-inject:begin --><!-- hexo-inject:end -->
+
+
+    
+
+</head>
+
+    <body>
+        <!-- hexo-inject:begin --><!-- hexo-inject:end --><div id="blog">
+            <!-- Define author's picture -->
+
+
+    
+        
+            
+        
+    
+
+<header id="header" data-behavior="1">
+    <i id="btn-open-sidebar" class="fa fa-lg fa-bars"></i>
+    <div class="header-title">
+        <a
+            class="header-title-link"
+            href="/"
+            aria-label=""
+        >
+            雨天等放晴
+        </a>
+    </div>
+    
+        
+            <a
+                class="header-right-picture "
+                href="#about"
+                aria-label="Open the link: /#about"
+            >
+        
+        
+            <img class="header-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+        </a>
+    
+</header>
+
+            <!-- Define author's picture -->
+
+
+
+        
+    
+
+<nav id="sidebar" data-behavior="1">
+    <div class="sidebar-container">
+        
+            <div class="sidebar-profile">
+                <a
+                    href="/#about"
+                    aria-label="Read more about the author"
+                >
+                    <img class="sidebar-profile-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+                </a>
+                <h4 class="sidebar-profile-name">Tang Huan</h4>
+                
+                    <h5 class="sidebar-profile-bio"></h5>
+                
+            </div>
+        
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/"
+                            
+                            rel="noopener"
+                            title="Home"
+                        >
+                        <i class="sidebar-button-icon fa fa-home" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Home</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-categories"
+                            
+                            rel="noopener"
+                            title="Categories"
+                        >
+                        <i class="sidebar-button-icon fa fa-bookmark" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Categories</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-tags"
+                            
+                            rel="noopener"
+                            title="Tags"
+                        >
+                        <i class="sidebar-button-icon fa fa-tags" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Tags</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-archives"
+                            
+                            rel="noopener"
+                            title="Archives"
+                        >
+                        <i class="sidebar-button-icon fa fa-archive" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Archives</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/about"
+                            
+                            rel="noopener"
+                            title="About"
+                        >
+                        <i class="sidebar-button-icon fas fa-cube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">About</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://twitter.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Twitter"
+                        >
+                        <i class="sidebar-button-icon fab fa-twitter" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Twitter</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.flickr.com/photos/135277712@N07/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Flickr"
+                        >
+                        <i class="sidebar-button-icon fab fa-flickr" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Flickr</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.instagram.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Instagram"
+                        >
+                        <i class="sidebar-button-icon fab fa-instagram" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Instagram</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="YouTube"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">YouTube</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://space.bilibili.com/634428/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="BiliBili"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube-square" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">BiliBili</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+    </div>
+</nav>
+
+            
+            <div id="main" data-behavior="1"
+                 class="
+                        hasCoverMetaIn
+                        ">
+                
+<article class="post">
+    
+    
+        <div class="post-header main-content-wrap text-center">
+    
+        <h1 class="post-title">
+            关于我和这个网站
+        </h1>
+    
+    
+        <div class="post-meta">
+    <time datetime="2017-06-23T00:00:00+08:00">
+	
+		    Jun 23, 2017
+    	
+    </time>
+    
+        <span>in </span>
+        
+    <a class="category-link" href="/categories/About/">About</a>
+
+
+    
+</div>
+
+    
+</div>
+
+    
+    
+        <div class="post-content markdown">
+    
+        <div class="main-content-wrap">
+            <!-- excerpt -->
+
+<div class="alert info"><p>上次更新：2020-03-31</p>
+</div>
+
+<p>这个网站是基于 GitHub Pages 和 Hexo 的，所有的照片视频储存在 Amazon S3 和 OneDrive，其他图片等储存在 GitHub。虽然都有 CDN 分发，但是在朝鲜和其他地区仍可能访问缓慢。此外，会有 YouTube、GoogleMaps、Flickr 之类的链接，上述地区需要代理。</p>
+<p>之前的内容有时候会更新，但是这个网站没有一个自动 tag 最后修改日期的功能，我暂时也没打算手动加上。</p>
+<p>我已經盡可能地縮減在 GitHub 上儲存的包括背景圖片在內的所有圖片的文件大小了，並且幾乎所有字體和第三方 CSS 都使用 jsdelivr 分發了，但是我試了下在一些地區和條件下仍有時訪問緩慢，TTFB 巨長，無能為力。而且 Safari 非常執著於將所有元素全部載入才顯示頁面，Chrome 會覺得背景圖可以慢慢載入先把其他顯示出來。。</p>
+<blockquote>
+<p>apple-touch-icon 来自 <a href="https://www.pixiv.net/member_illust.php?mode=medium&illust_id=73815971" target="_blank" rel="noopener">Pixiv / 卯月つくよ</a></p>
+</blockquote>
+<hr>
+<p>這個 Blog 之後我應該會使用繁體漢字寫一些內容，反正我用拼音，也沒什麼本質差異。我倒是覺得繁體好看一點，當然，對於筆畫特別多的字，我也會採用合適的簡化字（主要是異體字兼簡體字）替換，不然太小影響閱讀。文字嘛，注重內容，少點「規範」和優越感。另外，我喜歡傳統明體的寫法，所以我會用日語的思源宋體作為首選。</p>
+<p>2019-05-26<br>今年想多出去走走，下个月会去 🇩🇪，9 月底会去台北，国庆未知，感觉没什么 💴 了，很惨。想看看秋天的京都和冬天的北海道。其实还有挺多想去的地方的，随便列一下吧，看着就会是有钱的时候没时间、有时间的时候没钱了：冰岛（想看极光草帽山）、夏威夷（想看 Mauna Kea）、瑞士（想去冬季的马特洪峰和玩春季的山地过山车）、英国（没啥特别想去的地方，如果非要说就是中部地区图灵破解 Enigma 的那个博物馆）、新疆（果子沟好像很有意思）、阿根廷/智利（巴塔哥尼亚的秋）、美国黄石和冰川国家公园（Ansel Adams 在 Snake River 那的神作）、新西兰（感觉羊驼好多，🐏很有意思）……</p>
+<hr>
+<p>网站更新：</p>
+<p>2020-03-31<br>更新了一票东西，比如加入了语言自定，支持了繁体字体，尽量改为 CDN 分发资源，还解决好几个 bug。总之把一年前遗留的问题解决了，现在应该没有已知问题了。</p>
+<p>2019-05-26<br>把图片搬迁到 OneDrive 了，还是寻求一个免费吧。。不过我用了一个 json 存下所有的链接对应的文件名，以后要是有更好的方案了方便写个脚本直接迁移。</p>
+<p>2019-04-05<br>最近进入了一个新的阶段，然后上周末和今天花了三天来彻底把这个网站改成了我之前希望的样子，加上了诸如页内跳转的动画、思源宋体支持、懒加载图片、简化的回到目录按钮等等，还有一些排版上的比如对齐、字符段落间距、字号等等。其实我还是非常关注设计美学的，尽管我的「专业」跟这个毫不相关，当然如何让网页看上去美观也是很重要的事。<br>遗憾就是，我觉得 2019 的网页应该是会有一些载入动画和加载提示的，以及应该使用 PJAX。但是我目前都还没有好好系统学过 JavaScript，尝试了挺久，很多东西还是没能力实现，就此作罢，已经花了不少时间。</p>
+            
+
+
+        </div>
+    </div>
+    <div id="post-footer" class="post-footer main-content-wrap">
+        
+            <div class="post-footer-tags">
+                <span class="text-color-light text-small">TAGGED IN</span><br/>
+                
+    <a class="tag tag--primary tag--small t-link" href="/tags/About/" rel="tag">About</a>
+
+            </div>
+        
+        
+        
+            
+                <div id="gitalk"></div>
+
+            
+        
+    </div>
+</article>
+
+
+
+                <footer id="footer" class="main-content-wrap">
+    <span class="copyrights">
+        Copyrights &copy; 2021 Tang Huan. All Rights Reserved.
+    </span>
+</footer>
+
+            </div>
+            
+        </div>
+        
+
+
+    
+        
+    
+
+<div id="about">
+    <div id="about-card">
+        <div id="about-btn-close">
+            <i class="fa fa-times"></i>
+        </div>
+        
+            <img id="about-card-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+            <h4 id="about-card-name">Tang Huan</h4>
+        
+            <div id="about-card-bio"></div>
+        
+        
+            <div id="about-card-job">
+                <i class="fa fa-briefcase"></i>
+                <br/>
+                
+            </div>
+        
+        
+            <div id="about-card-location">
+                <i class="fa fa-map-marker-alt"></i>
+                <br/>
+                Shanghai
+            </div>
+        
+    </div>
+</div>
+
+        
+        
+<div id="cover" style="background-image:url('/assets/images/cover.jpg');"></div>
+        
+
+<!--SCRIPTS-->
+
+<script src="/assets/js/script-21vlobaq8sfmdbypn0z91hl6jyot6shixuux8ijser2jcbktmikbwlb6yvjx.min.js"></script>
+
+<!--SCRIPTS END-->
+
+
+    
+      <script type="text/javascript">
+        (function() {
+          function render() {
+            new Gitalk({
+              clientID: 'b7b365f41dbbfaaf9b88',
+              clientSecret: '25de272b8030e3c498dd56b883e4386d881b6d62',
+              repo: 'tangh.github.io',
+              owner: 'tangh',
+              admin: ['tangh'],
+              id: 'about',
+              title: document.title.replace(' - 雨天等放晴', ''),
+              ...{"language":"en","perPage":10,"distractionFreeMode":false,"enableHotKey":true,"pagerDirection":"first","createIssueManually":true}
+            }).render('gitalk');
+          }
+          var gc = document.createElement('script');
+          gc.type = 'text/javascript';
+          gc.src = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js';
+          gc.charset = 'UTF-8';
+          gc.onload = render;
+          gc.async = true;
+          document.querySelector('body').appendChild(gc);
+          var gcs = document.createElement('link');
+          gcs.href = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.css';
+          gcs.type = 'text/css';
+          gcs.rel = 'stylesheet';
+          gcs.media = 'screen,print';
+          document.querySelector('head').appendChild(gcs);
+        })();
+      </script>
+    
+
+
+
+
+    <script>!function(e){var c=Array.prototype.slice.call(document.querySelectorAll("img[data-original]"));function i(){for(var r=0;r<c.length;r++)t=c[r],(n=t.getBoundingClientRect()).top>=-n.height&&0<=n.left&&n.top<=1.5*(e.innerHeight||document.documentElement.clientHeight)&&function(){var t,n,e,i,o=c[r];t=o,n=function(){c=c.filter(function(t){return o!==t})},e=new Image,i=t.getAttribute("data-original"),e.onload=function(){t.src=i,n&&n()},e.src=i}();var t,n}i(),e.addEventListener("scroll",function(){var t,n;t=i,n=e,clearTimeout(t.tId),t.tId=setTimeout(function(){t.call(n)},500)})}(this);</script><!-- hexo-inject:begin --><!-- hexo-inject:end --></body>
+</html>

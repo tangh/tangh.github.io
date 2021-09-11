@@ -1,0 +1,833 @@
+
+<!DOCTYPE html>
+
+    <html lang="zh-Hant-CN">
+
+    
+<head>
+    <!-- hexo-inject:begin --><!-- hexo-inject:end --><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="generator" content="雨天等放晴">
+    <title>卷積神經網絡中的反向傳播 - 雨天等放晴</title>
+    <meta name="author" content="Tang Huan">
+    
+        <meta name="keywords" content="PyTorch,CNNs,Backpropagation,卷積網絡,反向傳播,卷积网络,反向传播">
+    
+    
+        <link rel="icon" href="https://tangh.github.io/assets/images/favicon.png">
+    
+    
+        <link rel="apple-touch-icon" sizes="180x180" href="https://tangh.github.io/assets/images/apple-touch-icon.png">
+    
+    
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg"},"articleBody":"\n\n\n前幾天有人問我一個問題，他想把一個自己創建的 tensor（而不是網絡的權重）放進 optimizer，但是 PyTorch 報錯：ValueError: can&#39;t optimize a non-leaf Tensor。短話長說，我決定寫一個關於反向傳播的文章，至於前面這個問題，會在中間用一節去解釋（不是解決，用一個 .detach() 就能解決了）。\n另外我先要說一點就是（可能是漢語習慣的問題），對於一個網絡，它更靠近最終輸出的部分叫「前面」，英文的 forward、network head 這些就是這個意思，靠近輸入的地方叫「後面」。\n\n\n\n\n最基本的反向傳播例子我們定義一個 tensor x，然後對其進行一些運算：\n123456789import torchx = torch.ones(2, 2, requires_grad=True)y = x + 2z = y * y * 3out = z.mean()out.backward()print(x.grad)\n\n在這裡，x 是一個 2×2 的数組，最終輸出的結果是 tensor([[4.5000, 4.5000],[4.5000, 4.5000]])。我們手動計算一下這個梯度：有 \\( o = \\frac{1}{4}\\sum_i z_i \\)，且 \\( z_i = 3(x_i+2)^2 \\)，所以 \\( \\frac{\\partial o}{\\partial x_i} = \\frac{3}{2}(x_i+2) \\)，此時 x=1，則梯度 $$ \\frac{\\partial o}{\\partial x_i}\\bigr\\rvert_{x_i=1} = \\frac{9}{2} = 4.5 $$\n這個例子之所以簡單明瞭，是因為前一层中一個元素實際上只和前後一层中的同位置的一個元素相對應，如下所示。\n12345x1 ─ y1 ─ z1 ┐x2 ─ y2 ─ z2 ┤             ├─ outx3 ─ y3 ─ z3 ┤x4 ─ y4 ─ z4 ┘\n\n在進行到下一步之前，我們先來看一個 PyTorch 的操作。\n如果 print(out)，結果為 tensor(27., grad_fn=&lt;MeanBackward0&gt;)，這裡不僅可以看到它的值，還可以看到它所關聯的梯度函数，這個函数，可以通過 out.grad_fn 訪問，它有一個属性 next_functions。對於 out.grad_fn.next_functions，輸出的結果為 ((&lt;MulBackward0 object at 0x7fa140178850&gt;, 0),)，如果看看 z.grad_fn 可以得到 &lt;MulBackward0 object at 0x7fa140178850&gt;。也就是說，next_functions 指向的就是反向傳播網絡中，某一個梯度函数的下一級的梯度函数。\nnext_functions 返回的第一层 tuple 內是指向的所有的下一級，也就是說，它可能指向多個函数；第二层 tuple 內的第二個元素一般是 0，它是反向函数的輸入值，只有返回多個可微分的值的函数（例如 torch.unbind()）才會使它的反向函数的這個輸入值非零。第二层 tuple 內的第一個元素如果是 None，說明它指向了一個常数。\n總之，我們可以一层一层去看這個反向傳播網絡，結果如下圖。我們可以看到，PyTorch 自動創建的這個反向網絡是一級一級的，每次只有一步操作，我們寫在一行內的操作也會自動被拆分開來。\nbackward network automatic built by pytorch\n\n最末尾的 AccumulateGrad object 有一個 .variable 属性，它指向的就是 x，這個後面還會提到。\n全連接层中的反向傳播對於卷積神經網絡，裡面也不排除包含全連接层。此外，一個具體而簡單的神經網絡例子，通常選擇全連接網絡，或者叫 MLP (Mutli-Layer Perceptron)。為了簡單一般只作三层：輸入层、隱藏层（hidden layer）、輸出层。其中每一個神經元，都與前後层中每個神經元相連，同樣為了簡便，在本文的例子中我們每一层只有兩個神經元，畫出結構圖如下。\na simple MLP network\n\n這裡可以看到，與上一節不同，神經元之間的連結更複雜了，不再只是平行地連結；但是這裡也只有一次乘法（線性運算），沒有二次的項了。此外，對每一個神經元（圓圈節點），如上圖右側所示（h1 為例），除了權重 w 以外，還有加上一個偏置 b，從 neth1 到 outh1，需要經過一個可微分的激活函数，這裡我們使用 sigmoid 函数，它的表達式和微分為：$$\\begin{aligned}y = \\text{sigmoid}(x) = \\frac{1}{1+e^{-x}} \\\\\\frac{\\partial y}{\\partial x} = \\frac{e^x}{({1+e^{-x})}^2} = y \\cdot (1-y)\\end{aligned}$$\n現在我們給定輸入值和目標（藍色），以及初始化值的權重（紅色），和初始化的偏置（黃色，假設每一层的偏置都相同，為了簡便），這樣一來，稍有常識的人都可以計算出每個神經元的激活值（綠色），如下圖所示。本文均假定對各種正向過程都已經非常了解。\nforward pass of MLP\n\n現在我們需要計算每個權重和偏置相對於最終偏差的梯度，損失函数這裡使用 squared error function: \\(E_{total} = \\frac{1}{2} (target - output)^2\\)，那麼 \\(E_{o1} = \\frac{1}{2} (target_{o1} - output_{o1})^2 = \\frac{1}{2} (0.01 - 0.751)^2 = 0.2748\\)，同理 \\(E_{o2} = 0.0236\\)。\n一般來說，總的損失就是二者之和，可以說是權重相等，都為 1。如果我們看看 PyTorch，我們總是需要在一個標量而不是向量上使用 .backward() 計算整個 graph 的梯度，如果在一個向量上使用會報錯 RuntimeError: grad can be implicitly created only for scalar outputs。對於一個輸出向量的函数 \\(\\vec{y}=f(\\vec{x})\\)，\\(\\vec{y}\\) 相對於 \\(\\vec{x}\\) 的梯度是一個雅可比矩陣（Jacobian Matrix）：$$\\begin{split}J = \\left( \\begin{array}{ccc} \\frac{\\partial y_{1}}{\\partial x_{1}} &amp; \\cdots &amp; \\frac{\\partial y_{1}}{\\partial x_{n}} \\\\ \\vdots &amp; \\ddots &amp; \\vdots \\\\ \\frac{\\partial y_{m}}{\\partial x_{1}} &amp; \\cdots &amp; \\frac{\\partial y_{m}}{\\partial x_{n}} \\end{array} \\right)\\end{split}$$\ntorch.autograd 用於計算 Vector-Jacobian Product，它不能直接計算整個 Jacobian 矩陣。也就是說，我們需要給定一個向量 v，去計算 \\(v^{T} \\cdot J\\)。如果這個 v 正好是某一個結果為標量的函数 \\(l = g\\left(\\vec{y}\\right)\\) 的梯度，也就是說 \\(v=\\left(\\begin{array}{ccc}\\frac{\\partial l}{\\partial y_{1}} &amp; \\cdots &amp; \\frac{\\partial l}{\\partial y_{m}}\\end{array}\\right)^{T}\\)，那麼根據鏈式法則，這個乘積是 \\(l\\) 相對於 \\(\\vec{x}\\) 的梯度：$$\\begin{split}J^{T}\\cdot v= \\left(\\begin{array}{ccc} \\frac{\\partial y_{1}}{\\partial x_{1}} &amp; \\cdots &amp; \\frac{\\partial y_{m}}{\\partial x_{1}} \\\\ \\vdots &amp; \\ddots &amp; \\vdots \\\\ \\frac{\\partial y_{1}}{\\partial x_{n}} &amp; \\cdots &amp; \\frac{\\partial y_{m}}{\\partial x_{n}} \\end{array}\\right)\\left(\\begin{array}{c} \\frac{\\partial l}{\\partial y_{1}} \\\\ \\vdots \\\\ \\frac{\\partial l}{\\partial y_{m}} \\end{array}\\right)=\\left(\\begin{array}{c} \\frac{\\partial l}{\\partial x_{1}} \\\\ \\vdots \\\\ \\frac{\\partial l}{\\partial x_{n}} \\end{array}\\right)\\end{split}$$\n所以如果我們想在一個向量上使用 vector.backward(v)，我們需要傳入一個 v = torch.tensor([weight1, weight2, ...])，它表示的就是每一個損失在總損失中的權重（它的參数名為 gradient，也可以看作是這個向量對某一個外部標量的梯度）。如果我們在一個標量上使用 scalar.backward()，那麼無需傳入任何參数。\n回到開始的話題，我們現在開始計算每一個權重關於最終損失的梯度，對於輸出层的 w5～w8，以 w5 為例，首先我們有，總損失對於 out o1 的梯度：$$\\frac{\\partial L_{total}}{\\partial out_{o1}} =2 \\cdot \\frac{1}{2} \\cdot (target_{o1} - out_{o1}) * (-1)\\ +\\ 0= 0.7414$$總損失的第二項 \\(E_{o2}\\) 與 out o1 沒有關係，所以對其的梯度為 0。\n而 out o1 對於 net o1，就是 sigmoid 的梯度，\\(\\frac{\\partial out_{o1}}{\\partial net_{o1}} = out_{o1} \\cdot (1 - out_{o1}) = 0.1868 \\)。幾乎所有激活函数是對每一個元素單獨做的運算，不涉及相互影響（即對每一個元素，操作公式都是相同的），所以跟上一節的情況完全相同。梯度通過激活函数時，整個梯度圖的大小是不會改変的。\n最終，我們看 net o1 對於 w5，有 \\(net_{o1} = w_5 * out_{h1}\\ +\\ w_6 * out_{h1}\\ +\\ b_2\\)，所以 \\(\\frac{\\partial net_{o1}}{\\partial w_5} = out_{h1} = 0.5933\\)。所以根據鏈式法則，我們把上述三項相乘，就得到總損失 L 對於 w5 的梯度 0.7414 × 0.1868 × 0.5933 = 0.082。\n如果只把前兩項相乘，我們得到 \\(\\frac{\\partial L_{total}}{\\partial net_{o1}}\\)。通常，我們把總損失對某一层（或某一個神經元）未激活之前的結果（即 net）的導数記作 \\(\\delta_{layer}\\)，例如這裡可記作 \\(\\delta_{o1}\\)。\n\n\n計算輸出层的其它權重和偏置也都類似。再看中間的隱藏层，它跟輸出层的區別就是，它的右側與多個神經元相連，所以梯度會來自於右側多條通路，所以$$\\begin{aligned}\\frac{\\partial L_{total}}{\\partial w_1} = &amp;\\frac{\\partial L_{total}}{\\partial out_{h1}} \\cdot \\frac{\\partial out_{h1}}{\\partial net_{h1}} \\cdot \\frac{\\partial net_{h1}}{\\partial w_1} \\\\= &amp; \\left(\\frac{\\partial L_{total}}{\\partial out_{o1}} \\cdot \\frac{\\partial out_{o1}}{\\partial net_{o1}} \\cdot \\frac{\\partial net_{o1}}{\\partial out_{h1}}\\ +\\ \\frac{\\partial L_{total}}{\\partial out_{o2}} \\cdot \\frac{\\partial out_{o2}}{\\partial net_{o2}} \\cdot \\frac{\\partial net_{o2}}{\\partial out_{h1}}\\right) \\\\&amp; \\cdot \\frac{\\partial out_{h1}}{\\partial net_{h1}} \\cdot \\frac{\\partial net_{h1}}{\\partial w_1} \\\\= &amp; (sum_o \\delta_o \\cdot w_{ho}) \\times out_{h1} (1 - out_{h1}) \\times i_1 \\\\= &amp; 0.0364 \\times 0.2413 \\times 0.05 = 0.000439\\end{aligned}$$\n看著很恐怖，其實並不複雜。以第二行加號左邊的三項為例，前兩項 \\(\\delta_{o1}\\) 上面已經算過了；第三項仍然有 \\(net_{o1} = w_5 * out_{h1}\\ +\\ w_6 * out_{h1}\\ +\\ b_2\\)，所以 \\(\\frac{\\partial net_{o1}}{\\partial out_{h1}} = w_5 = 0.40\\)，由於這都是一次線性的運算，所以對權重求導就得輸入，對輸入求導就得權重；對於第三行，第一項是激活函数，和上面也一樣，最後一項是對權重求導，所以得輸入值 i1。\n這裡也看到一件事，就是越往後梯度越來越小了，因為乘上小於一的項越來越多，「梯度消失」說的就是這麼回事。\n如何簡明地實現顯然對於每一個權重，我們不應當從損失函数開始一個一個地計算到最後，而是應當先計算一級（輸出层），然後把一些計算結果傳給前一級（隱藏层），然後前一級拿到這個結果只需計算和他直接相連的部分。實際使用上，全連接层也是一個整體，肯定不會一個一個神經元單獨計算。\n我們在得到 [\\(\\delta_{o1}\\), \\(\\delta_{o2}\\)] 之後，可以作為一個整體傳給後一层，然後做一個矩陣乘法 \\(\\cdot \\begin{bmatrix} w_5 &amp; w_6 \\\\ w_7 &amp; w_8 \\end{bmatrix}\\)。\n\n對於純公式的推導，可以參考 反向传播算法推导-全连接神经網络\n\n對於易懂的代碼，可以參考 How to Code a Neural Network with Backpropagation In Python (from scratch)\n\n\n卷積层中的反向傳播卷積层自然是卷積神經網絡的關鍵，所以這一部分先會說得比較抽象和泛化。對於卷積层，在運算上與上一節沒有什麼不同，所以我們可以預料對權重求導就得輸入，對輸入求導就得權重還是一樣的。區別在於前後的連結方式，卷積层是稀疏的連接，一個神經元並不會和後一級所有神經元相連，此外，權重會有復用，所以不同的連線，不表示這個連線上的權重不同，如下圖。當卷積核大小等於輸入圖時，卷積层就変為一個全連接层，所以這裡會是上面一節進一步抽象、泛化的反向傳播方式。\nforward pass of conv\n\n符號說明：\n\n卷積核 \\(w\\) 的尺寸為 \\(k_1 \\times k_2\\)，\\(w_{m,n}^l\\) 表示這個卷積核內通道為 \\(l\\)，位置為 \\(m, n\\) 的參数值。\n\n\\(x_{i,j}^l\\) 表示一個卷積的結果，它是由上一层的輸出與卷積核權重相乘加上偏置值得到。輸入特徵圖 \\(O\\)（即進行卷積之前的）的尺寸使用 \\(H \\times W\\) 表示， \\(i, j\\) 為特徵圖上的某一個位置。$$x_{i,j}^l = \\sum_{m = 0}^{k_1 - 1} \\sum_{n = 0}^{k_2 - 1} w_{m,n}^l o_{i + m,j + n}^{l-1} + b^l$$\n\n\\(o_{i,j}^l\\) 為激活函数的輸出值，即 \\(o_{i,j}^l = f(x_{i,j}^{l})\\)，\\(f(\\cdot)\\) 表示某種激活函数。\n\n\n\n\n\n假設進行的是 padding=0, stride=1 的卷積，那麼正向過程如符號說明內的公式，\\(\\delta w_{m^{\\prime},n^{\\prime}}^l\\) 為$$\\frac{\\partial L}{\\partial w_{m^{\\prime},n^{\\prime}}^l} = \\sum_{i=0}^{H-k_1} \\sum_{j=0}^{W-k_2} \\frac{\\partial L}{\\partial x_{i,j}^{l}} \\frac{\\partial x_{i,j}^{l}}{\\partial w_{m^{\\prime},n^{\\prime}}^l} \\tag{1}$$\n這裡的 \\(x_{i,j}^l\\) 就是上一節中的 net 层中的元素，比如 net h1、net o1。所以這個公式表示的就是直達權重的最後一步，第二項類似於之前的 \\(\\frac{\\partial net_{h1}}{\\partial w_1}\\)，第一項 \\(\\delta x_{i,j}^{l}\\) 如前所述是從前方层傳遞過來的，在這裡是個已知值。積分的區域為卷積核上的這個參数觸及的區域。\n又有$$x_{i,j}^l = \\sum_{m = 0}^{k_1 - 1} \\sum_{n = 0}^{k_2 - 1} w_{m,n}^l o_{i + m,j + n}^{l-1} + b^l$$\n所以第二項有$$\\frac{\\partial x_{i,j}^{l}}{\\partial w_{m^{\\prime},n^{\\prime}}^l} = \\frac{\\partial}{\\partial w_{m^{\\prime},n^{\\prime}}^l}\\left( \\sum_{m} \\sum_{n} w_{m,n}^{l}o_{i+m, j+n}^{l-1} + b^l \\right)$$\n繼續進一步展開，卷積核內的每一個權重顯然是獨立的，前一层的輸出 o 顯然也不受這個卷積核的影響，所以展開後，只有一項求偏導不為零$$\\begin{align}\\frac{\\partial x_{i,j}^{l}}{\\partial w_{m^{\\prime},n^{\\prime}}^l} &amp;= \\frac{\\partial}{\\partial w_{m’,n’}^l}\\left( w_{0,0}^{l} o_{ i + 0, j + 0}^{l-1} + \\dots + w_{m’,n’}^{l} o_{ i + m^{\\prime}, j + n^{\\prime}}^{l-1} + \\dots + b^l\\right) \\\\&amp; = \\frac{\\partial}{\\partial w_{m^{\\prime},n^{\\prime}}^l}\\left( w_{m^{\\prime},n^{\\prime}}^{l} o_{ i + m^{\\prime}, j + n^{\\prime}}^{l-1}\\right) \\\\&amp; = o_{i+m^{\\prime},j+n^{\\prime}}^{l-1}\\end{align}$$\n把這個結論代入最開始的公式（1）：$$\\frac{\\partial L}{\\partial w_{m’,n’}^l} = \\sum_{i=0}^{H-k_1} \\sum_{j=0}^{W-k_2} \\delta x_{i,j}^{l} \\cdot o_{ i + m^{\\prime}, j + n^{\\prime}}^{l-1} \\tag{2}$$\n這個式子裡面雙重求和就是權重共享的結果，隨著 k1，k2 的增大，卷積核的大小逐漸接近於輸入特徵圖，這個求和區域也逐漸減小。當核的大小等於特徵圖大小時，這個式子與上一節中的全連接的形式相同。同時我們對比一下最開始的卷積公式：$$x_{i,j}^l = \\sum_{m = 0}^{k_1 - 1} \\sum_{n = 0}^{k_2 - 1} w_{m,n}^l o_{i + m,j + n}^{l-1} + b^l$$\n就發現這個（gradients of L w.r.t to the weight）求導的公式其實就是個卷積操作，輸入是 \\(O^{l-1}\\)，卷積核是前方层傳來的梯度圖（gradients of L w.r.t to the feature maps），表示特徵圖上一個值的変動，會對損失值造成多大影響。這個梯度圖顯然也不是憑空產生的，我們現在就還要計算它。\n對於一個 \\(x_{i,j}^l\\)，它在 l+1 层中的影響區域是左上角 \\(\\left(i^{\\prime}-k_1+1,j^{\\prime}-k_2+1 \\right)\\) 到右下角 \\(\\left(i^{\\prime},j^{\\prime} \\right)\\) 中間的矩形區域。那麼\n$$\\begin{align}\\frac{\\partial L}{\\partial x_{i’,j’}^{l}} &amp;= \\sum_{m = 0}^{k_1 -1} \\sum_{n = 0}^{k_2 -1} \\frac{\\partial E}{\\partial x_{i’-m, j’-n}^{l+1}}\\frac{\\partial x_{i’-m, j’-n}^{l+1}}{\\partial x_{i’,j’}^l} \\\\&amp;= \\sum_{m = 0}^{k_1 -1} \\sum_{n = 0}^{k_2 -1} \\delta_{i’-m, j’-n}^{l+1} \\frac{\\partial x_{i’-m, j’-n}^{l+1}}{\\partial x_{i’,j’}^l} \\tag{3} \\\\\\end{align}$$\n還是一樣地看第二項，展開裡面的 x：$$\\begin{align}\\frac{\\partial x_{i’-m,j’-n}^{l+1}}{\\partial x_{i’,j’}^l} &amp;= \\frac{\\partial}{\\partial x_{i’,j’}^l} \\left( \\sum_{m’=0}^{k_1^{l+1} -1} \\sum_{n’=0}^{k_2^{l+1} -1} w_{m’, n’}^{l+1} o_{i’ - m + m’,j’ - n + n’}^{l} + b^{l+1} \\right) \\\\&amp;= \\frac{\\partial}{\\partial x_{i’,j’}^l}\\left( \\sum_{m’=0}^{k_1^{l+1} -1} \\sum_{n’=0}^{k_2^{l+1} -1} w_{m’,n’}^{l+1}f\\left(x_{i’ - m + m’,j’ - n + n’}^{l}\\right) + b^{l+1} \\right)\\end{align}$$\n繼續展開兩個求和，在這裡同樣，下一层的權重不會受這一层的特徵圖的影響，一個特徵圖之內的各個值也是獨立的，所以它們的偏導都為零：$$\\begin{align}\\frac{\\partial x_{i^{\\prime} - m,j^{\\prime} - n}^{l+1}}{\\partial x_{i’,j’}^l}&amp;= \\frac{\\partial}{\\partial x_{i’,j’}^l}\\left( w_{m’,n’}^{l+1} f(x_{ 0 - m + m’, 0 - n + n’}^{l}) + \\dots + w_{m,n}^{l+1} f(x_{i’,j’}^{l}) + \\dots + b^{l+1}\\right) \\\\&amp;= \\frac{\\partial}{\\partial x_{i’,j’}^l}\\left( w_{m,n}^{l+1} f(x_{i’,j’}^{l}) \\right) \\\\&amp;= w_{m,n}^{l+1} \\frac{\\partial}{\\partial x_{i’,j’}^l} \\left( f(x_{i’,j’}^{l}) \\right) \\\\&amp;= w_{m,n}^{l+1} f’(x_{i’,j’}^{l})\\end{align}$$\n把這個結論代回開始的公式（3）：$$\\frac{\\partial E}{\\partial x_{i’,j’}^{l}} =f’(x_{i’,j’}^{l}) \\cdot \\sum_{m = 0}^{k_1^{l+1} - 1} \\sum_{n = 0}^{k_2^{l+1} - 1} \\delta_{i’-m, j’-m}^{l+1} w_{m,n}^{l+1} \\tag{4}$$\n這同樣是一個卷積，只是 i-m, j-n 表示我們需要把卷積核反轉 180 度。這個卷積的輸入是更前面层傳回的 \\(\\delta_{i’-m, j’-m}^{l+1}\\)，卷積核是 l+1 层的權重，而 \\(f’(x_{i’,j’}^{l})\\) 這個激活函数的導数是個常数，前面也提到了，它是對每個元素單獨做的。\n公式（2）和（4）就是反向傳播的核心，前者用於更新參数，後者用於將對總損失的梯度向後傳播，用於後一层的計算。同時，這裡我們看到，卷積求梯度也是由卷積完成，所以有些地方會說反卷積就是用卷積的梯度。\n簡單例子和代碼上述分析可以看出，形式都是類似的，但是有點抽象，這裡我們看一個具體的例子幫助理解。下面的圖是一個卷積的正向過程，這裡我們略去 bias。\nfoward pass of a simple conv example\n\n$$\\begin{align}X_{11} = W_{11} O_{11} + W_{12} O_{12} + W_{21} O_{21} + W_{22} O_{22} \\\\X_{12} = W_{11} O_{12} + W_{12} O_{13} + W_{21} O_{22} + W_{22} O_{23} \\\\X_{21} = W_{11} O_{21} + W_{12} O_{22} + W_{21} O_{31} + W_{22} O_{32} \\\\X_{22} = W_{11} O_{22} + W_{12} O_{23} + W_{21} O_{32} + W_{22} O_{33} \\\\\\end{align}$$\n把上面四個式子加在一起，然後分別對四個參数求偏導，可得\n$$\\begin{align}\\frac{\\partial L}{\\partial W_{11}} = \\frac{\\partial L}{\\partial X_{11}} \\frac{\\partial X_{11}}{\\partial W_{11}} + \\frac{\\partial L}{\\partial X_{12}} \\frac{\\partial X_{12}}{\\partial W_{11}} + \\frac{\\partial L}{\\partial X_{21}} \\frac{\\partial X_{21}}{\\partial W_{11}} + \\frac{\\partial L}{\\partial X_{22}} \\frac{\\partial X_{22}}{\\partial W_{11}} \\\\\\frac{\\partial L}{\\partial W_{12}} = \\frac{\\partial L}{\\partial X_{11}} \\frac{\\partial X_{11}}{\\partial W_{12}} + \\frac{\\partial L}{\\partial X_{12}} \\frac{\\partial X_{12}}{\\partial W_{12}} + \\frac{\\partial L}{\\partial X_{21}} \\frac{\\partial X_{21}}{\\partial W_{12}} + \\frac{\\partial L}{\\partial X_{22}} \\frac{\\partial X_{22}}{\\partial W_{12}} \\\\\\frac{\\partial L}{\\partial W_{21}} = \\frac{\\partial L}{\\partial X_{11}} \\frac{\\partial X_{11}}{\\partial W_{21}} + \\frac{\\partial L}{\\partial X_{12}} \\frac{\\partial X_{12}}{\\partial W_{21}} + \\frac{\\partial L}{\\partial X_{21}} \\frac{\\partial X_{21}}{\\partial W_{12}} + \\frac{\\partial L}{\\partial X_{22}} \\frac{\\partial X_{22}}{\\partial W_{21}} \\\\\\frac{\\partial L}{\\partial W_{22}} = \\frac{\\partial L}{\\partial X_{11}} \\frac{\\partial X_{11}}{\\partial W_{22}} + \\frac{\\partial L}{\\partial X_{12}} \\frac{\\partial X_{12}}{\\partial W_{22}} + \\frac{\\partial L}{\\partial X_{21}} \\frac{\\partial X_{21}}{\\partial W_{22}} + \\frac{\\partial L}{\\partial X_{22}} \\frac{\\partial X_{22}}{\\partial W_{22}} \\\\\\end{align}$$\n我們在之前已經知道，\\(\\frac{\\partial X}{\\partial W} = O\\)，所以上面的式子可以寫成$$\\begin{align}\\frac{\\partial L}{\\partial W_{11}} = \\frac{\\partial L}{\\partial X_{11}} O_{11} + \\frac{\\partial L}{\\partial X_{12}} O_{12} + \\frac{\\partial L}{\\partial X_{21}} O_{21} + \\frac{\\partial L}{\\partial X_{22}} O_{22} \\\\\\frac{\\partial L}{\\partial W_{12}} = \\frac{\\partial L}{\\partial X_{11}} O_{12} + \\frac{\\partial L}{\\partial X_{12}} O_{13} + \\frac{\\partial L}{\\partial X_{21}} O_{22} + \\frac{\\partial L}{\\partial X_{22}} O_{23} \\\\\\frac{\\partial L}{\\partial W_{21}} = \\frac{\\partial L}{\\partial X_{11}} O_{21} + \\frac{\\partial L}{\\partial X_{12}} O_{22} + \\frac{\\partial L}{\\partial X_{21}} O_{31} + \\frac{\\partial L}{\\partial X_{22}} O_{32} \\\\\\frac{\\partial L}{\\partial W_{22}} = \\frac{\\partial L}{\\partial X_{11}} O_{22} + \\frac{\\partial L}{\\partial X_{12}} O_{23} + \\frac{\\partial L}{\\partial X_{21}} O_{32} + \\frac{\\partial L}{\\partial X_{22}} O_{33} \\\\\\end{align}$$\n如果仔細看看，這個形式，其實就是卷積，卷積的輸入是正向過程相同的輸入，卷積核是從後一层傳過來的梯度圖，如下圖所示。\nweight gradient calculation as conv\n\n現在我們得到了卷積核 W 的每個元素對於最終損失的梯度，我們可以更新這個卷積核的參数了。同樣，下一件事是，得到輸入特徵圖 O 上每個元素關於最終損失的梯度，這樣我們才可以把這個梯度繼續向後傳播。\n同樣把四個式子相加，然後求偏導，結果如下：$$\\begin{align}\\frac{\\partial L}{\\partial O_{11}} = \\frac{\\partial L}{\\partial X_{11}} W_{11} + \\frac{\\partial L}{\\partial X_{12}} \\cdot 0 + \\frac{\\partial L}{\\partial X_{21}} \\cdot 0 + \\frac{\\partial L}{\\partial X_{22}} \\cdot 0 \\\\\\frac{\\partial L}{\\partial O_{12}} = \\frac{\\partial L}{\\partial X_{11}} W_{12} + \\frac{\\partial L}{\\partial X_{12}} W_{11} + \\frac{\\partial L}{\\partial X_{21}} \\cdot 0 + \\frac{\\partial L}{\\partial X_{22}} \\cdot 0 \\\\\\frac{\\partial L}{\\partial O_{13}} = \\frac{\\partial L}{\\partial X_{11}} \\cdot 0 + \\frac{\\partial L}{\\partial X_{12}} W_{12} + \\frac{\\partial L}{\\partial X_{21}} \\cdot 0 + \\frac{\\partial L}{\\partial X_{22}} \\cdot 0 \\\\\\frac{\\partial L}{\\partial O_{21}} = \\frac{\\partial L}{\\partial X_{11}} W_{21} + \\frac{\\partial L}{\\partial X_{12}} \\cdot 0 + \\frac{\\partial L}{\\partial X_{21}} W_{11} + \\frac{\\partial L}{\\partial X_{22}} \\cdot 0 \\\\\\frac{\\partial L}{\\partial O_{22}} = \\frac{\\partial L}{\\partial X_{11}} W_{22} + \\frac{\\partial L}{\\partial X_{12}} W_{21} + \\frac{\\partial L}{\\partial X_{21}} W_{12} + \\frac{\\partial L}{\\partial X_{22}} W_{11} \\\\\\frac{\\partial L}{\\partial O_{23}} = \\frac{\\partial L}{\\partial X_{11}} \\cdot 0 + \\frac{\\partial L}{\\partial X_{12}} W_{22} + \\frac{\\partial L}{\\partial X_{21}} \\cdot 0 + \\frac{\\partial L}{\\partial X_{22}} W_{11} \\\\\\frac{\\partial L}{\\partial O_{31}} = \\frac{\\partial L}{\\partial X_{11}} \\cdot 0 + \\frac{\\partial L}{\\partial X_{12}} \\cdot 0 + \\frac{\\partial L}{\\partial X_{21}} W_{21} + \\frac{\\partial L}{\\partial X_{22}} W_{11} \\\\\\frac{\\partial L}{\\partial O_{32}} = \\frac{\\partial L}{\\partial X_{11}} \\cdot 0 + \\frac{\\partial L}{\\partial X_{12}} \\cdot 0 + \\frac{\\partial L}{\\partial X_{21}} W_{22} + \\frac{\\partial L}{\\partial X_{22}} W_{21} \\\\\\frac{\\partial L}{\\partial O_{33}} = \\frac{\\partial L}{\\partial X_{11}} \\cdot 0 + \\frac{\\partial L}{\\partial X_{12}} \\cdot 0 + \\frac{\\partial L}{\\partial X_{21}} \\cdot 0 + \\frac{\\partial L}{\\partial X_{22}} W_{22} \\\\\\end{align}$$\n這看起來顯然也是一種卷積操作，有人把它叫做全卷積（完全的「全」，不是全部的「全」），示意圖在下面，簡單說就是 padding = 1。這裡我們需要用到正向過程中的卷積核，將它旋轉 180 度後使用。\ninput gradient calculation as full conv\n\nfull conv operation schematic diagram\n\n這裡有一個簡單的代碼描述上面的過程\n\n\n\n\n最開始的問題從上面我們可以看出，在反向傳播的過程中，除了損失對參数的梯度是必須要計算以及儲存之外，我們還必須計算一個損失對特徵圖的梯度，並且要把它傳給後一层。\n什麼是葉子節點，直觀就是就是不在「莖」上的，後續沒有其它節點的節點，其實是個很常見的概念。在這裡說人話就是直接由用戶創建，而不是從另一個節點計算得到的節點（A leaf Variable is a variable that is at the beginning of the graph）。神經網絡中的參数都是 leaf tensor，而中間的所有特徵圖和輸出都不是 leaf tensor，輸入圖可以是，但是一般沒人計算它的梯度。巧的是問我那個問題就是因為他的優化對象是輸入圖像（可視化、風格遷移這些任務上有時需這樣做）。在 PyTorch 上，如果一個 CPU Tensor 是 requires_grad=True 的，那麼用 .to(device) 將它發送到 GPU 的時候會產生一個關聯操作 grad_fn=&lt;CopyBackwards&gt;，要解決的話可以 .to(device).detach().requires_grad_(True)。\n為何 optimizer 只能對葉子節點進行梯度下降？因為幾乎所有的深度學習框架，都不會儲存非葉子節點的梯度，它的梯度在傳遞給所有相連的後方层之後就被刪除了，沒有紀錄下梯度自然沒法進行梯度下降。那為何不儲存呢，回到最開始的雅可比矩陣，對於一個 tensor function，假設 H = H′ = W = W′ = 32 and C = C′ = 128，那麼這個雅可比矩陣內的元素数是 H′W′C′HWC ≈ 17 × 10e9 個，需要約 68GB 進行單精度儲存，所以 .backward() 一定是在一個標量上進行（或者說計算的是 Vector-Jacobian Product）。對於一個標量的梯度，矩陣大小就只有 HWC 大小，大約是百 MB 的級別，但是還考慮到 batch size，和各種 skip-connection，這個總大小還是很可觀的。而且現代網絡都是幾百层隨隨便便，絕對沒可能全部儲存下來。\nforward network for a DAG\nbackward network for a DAG\n\n\n如果要判斷一個 tensor 是不是葉子節點，可以使用 tensor.is_leaf，對於葉子節點，它會在反向圖中創建一個 AccumulateGrad object，也就是我們第一節中提到的，表示在這裡累積梯度。\n如果需要獲得一個中間值的梯度，可以使用 retain_grad，或者更複雜的可以用 register_hook。\n這裡再說一個關於 optimizer、grad 和 weight decay 的事。一般來說，weight decay（權值衰減）是說要在 loss 上加上一項，使得網絡的參数小一點，防止過擬合。如果使用 L2 regularization，那麼總的 loss 為：$$\\text{Regularized Loss} = \\text{Loss} + \\lambda \\sum_i {\\omega}_i^2$$\n在 PyTorch 中，weight decay 的參数是傳給 optimizer 的，它是在更新參数時才用這一項，會把某一個參数的梯度 乘以 (1 + weight_decay)。這麼做也是因為參数和參数之間是獨立的，求導之後如下式（係数 2 可以忽略）。$$\\text{updated weight}_i = \\text{weight}_i - lr \\times \\alpha (grad_i + 2 \\lambda {\\omega}_i)$$\n池化层中的反向傳播眾所周知池化层中是沒有可學習的參数的，所以這裡只看對於特徵圖上的值的梯度怎麼通過。從前面傳來一個 C × H × W 大小的梯度圖，要往後傳一個 C × nH × nW 的梯度圖。\n\n最大值池化，前向過程中會紀錄每一個 bin 中最大值的位置，在反向過程中，梯度會賦給之前紀錄的位置，bin 中的其它位置填 0。\n\n平均值池化，梯度會縮小 n × n 倍然後賦給一個 bin 內所有位置，即每個 bin 內梯度相同。\n\n\n\n\n後話：自定義一個網絡层，例如 RoIPooling 這些，主要是要將損失對特徵圖的梯度計算出來然後向後傳出，對於一些有參数的层，還需要計算出對參数的梯度，儲存在 tensor 的 .grad 属性中傳給 optimizer。\n我沒想到寫這個畫圖排版之類的居然花了兩天時間，早知如此就不寫了。。（這好像是絕大多說要寫的東西的下場，我去年居然還說要寫一些關於色彩科學計算攝影之類的？？對了，我最近好一陣在研究 🎞️，並魔改一個拍立得給中片幅膠片機做後背，真的很好玩）\n參考資料：\n\nDeep Learning with PyTorch: A 60 Minute Blitz &gt; Autograd: Automatic Differentiation\n\nA Step by Step Backpropagation Example\n\nBackpropagation In Convolutional Neural Networks\n\nForward And Backpropagation in Convolutional Neural Network\n\nBack Propagation in Convolutional Neural Networks — Intuition and Code\n\nManual of MatConvNet: CNNs for MATLAB\n\n卷积神经網络(CNN)反向传播算法\n\n\n","dateCreated":"2020-04-19T00:00:00+08:00","dateModified":"2021-05-24T01:28:51+08:00","datePublished":"2020-04-19T00:00:00+08:00","description":"反向傳播的基本原理，和反向傳播在卷積網絡中的幾個常見层的具體分析，以及一些 PyTorch 反向圖、優化器的相關知識。","headline":"卷積神經網絡中的反向傳播","image":[],"mainEntityOfPage":{"@type":"WebPage","@id":"https://tangh.github.io/articles/backward-in-convolutional-neural-networks/"},"publisher":{"@type":"Organization","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg","logo":{"@type":"ImageObject","url":"icon.jpg"}},"url":"https://tangh.github.io/articles/backward-in-convolutional-neural-networks/","keywords":"PyTorch, Computer Vision, Deep Learning, Backpropagation"}</script>
+    <meta name="description" content="反向傳播的基本原理，和反向傳播在卷積網絡中的幾個常見层的具體分析，以及一些 PyTorch 反向圖、優化器的相關知識。">
+<meta property="og:type" content="blog">
+<meta property="og:title" content="卷積神經網絡中的反向傳播">
+<meta property="og:url" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;articles&#x2F;backward-in-convolutional-neural-networks&#x2F;">
+<meta property="og:site_name" content="雨天等放晴">
+<meta property="og:description" content="反向傳播的基本原理，和反向傳播在卷積網絡中的幾個常見层的具體分析，以及一些 PyTorch 反向圖、優化器的相關知識。">
+<meta property="og:locale" content="en_US">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-backward-in-convnet&#x2F;backward-network-automatic-built-by-pytorch.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-backward-in-convnet&#x2F;a-simple-mlp-network.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-backward-in-convnet&#x2F;forward-pass-of-mlp.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-backward-in-convnet&#x2F;connection-in-forward-pass-of-conv.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-backward-in-convnet&#x2F;forward-pass-of-conv.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-backward-in-convnet&#x2F;weight-gradient-calc.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-backward-in-convnet&#x2F;input-gradient-calc.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-backward-in-convnet&#x2F;full-conv-operation.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-backward-in-convnet&#x2F;forward-network-for-dag-preview.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-backward-in-convnet&#x2F;backward-network-for-dag-preview.png">
+<meta property="article:published_time" content="2020-04-18T16:00:00.000Z">
+<meta property="article:modified_time" content="2021-05-23T17:28:51.052Z">
+<meta property="article:author" content="Tang Huan">
+<meta property="article:tag" content="PyTorch">
+<meta property="article:tag" content="CNNs">
+<meta property="article:tag" content="Backpropagation">
+<meta property="article:tag" content="卷積網絡">
+<meta property="article:tag" content="反向傳播">
+<meta property="article:tag" content="卷积网络">
+<meta property="article:tag" content="反向传播">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-backward-in-convnet&#x2F;backward-network-automatic-built-by-pytorch.png">
+    
+    
+        
+    
+    
+        <meta property="og:image" content="https://tangh.github.io/assets/images/icon.jpg"/>
+    
+    
+    
+    
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
+    <!--STYLES-->
+    
+<link rel="stylesheet" href="/assets/css/style-iaetwm81hfopcuajcp7qnh2zsnqn4dhiu3nftuj79wdhe7fie6l4r0thrs6g.min.css">
+
+    <!--STYLES END-->
+    
+    <script async src="https://www.googletagmanager.com/gtag/js?id=UA-137837052-1"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'UA-137837052-1');
+    </script><!-- hexo-inject:begin --><!-- hexo-inject:end -->
+
+
+    
+
+</head>
+
+    <body>
+        <!-- hexo-inject:begin --><!-- hexo-inject:end --><div id="blog">
+            <!-- Define author's picture -->
+
+
+    
+        
+            
+        
+    
+
+<header id="header" data-behavior="4">
+    <i id="btn-open-sidebar" class="fa fa-lg fa-bars"></i>
+    <div class="header-title">
+        <a
+            class="header-title-link"
+            href="/"
+            aria-label=""
+        >
+            雨天等放晴
+        </a>
+    </div>
+    
+        
+            <a
+                class="header-right-picture "
+                href="#about"
+                aria-label="Open the link: /#about"
+            >
+        
+        
+            <img class="header-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+        </a>
+    
+</header>
+
+            <!-- Define author's picture -->
+
+
+
+        
+    
+
+<nav id="sidebar" data-behavior="4">
+    <div class="sidebar-container">
+        
+            <div class="sidebar-profile">
+                <a
+                    href="/#about"
+                    aria-label="Read more about the author"
+                >
+                    <img class="sidebar-profile-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+                </a>
+                <h4 class="sidebar-profile-name">Tang Huan</h4>
+                
+                    <h5 class="sidebar-profile-bio"></h5>
+                
+            </div>
+        
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/"
+                            
+                            rel="noopener"
+                            title="Home"
+                        >
+                        <i class="sidebar-button-icon fa fa-home" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Home</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-categories"
+                            
+                            rel="noopener"
+                            title="Categories"
+                        >
+                        <i class="sidebar-button-icon fa fa-bookmark" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Categories</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-tags"
+                            
+                            rel="noopener"
+                            title="Tags"
+                        >
+                        <i class="sidebar-button-icon fa fa-tags" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Tags</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-archives"
+                            
+                            rel="noopener"
+                            title="Archives"
+                        >
+                        <i class="sidebar-button-icon fa fa-archive" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Archives</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/about"
+                            
+                            rel="noopener"
+                            title="About"
+                        >
+                        <i class="sidebar-button-icon fas fa-cube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">About</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://twitter.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Twitter"
+                        >
+                        <i class="sidebar-button-icon fab fa-twitter" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Twitter</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.flickr.com/photos/135277712@N07/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Flickr"
+                        >
+                        <i class="sidebar-button-icon fab fa-flickr" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Flickr</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.instagram.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Instagram"
+                        >
+                        <i class="sidebar-button-icon fab fa-instagram" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Instagram</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="YouTube"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">YouTube</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://space.bilibili.com/634428/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="BiliBili"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube-square" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">BiliBili</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+    </div>
+</nav>
+
+            
+            <div id="main" data-behavior="4"
+                 class="
+                        hasCoverMetaIn
+                        ">
+                
+<article class="post">
+    
+    
+        <div class="post-header main-content-wrap text-center">
+    
+        <h1 class="post-title">
+            卷積神經網絡中的反向傳播
+        </h1>
+    
+    
+        <div class="post-meta">
+    <time datetime="2020-04-19T00:00:00+08:00">
+	
+		    Apr 19, 2020
+    	
+    </time>
+    
+        <span>in </span>
+        
+    <a class="category-link" href="/categories/Computer-Science/">Computer Science</a>, <a class="category-link" href="/categories/Computer-Science/Deep-Learning/">Deep Learning</a>
+
+
+    
+</div>
+
+    
+</div>
+
+    
+    
+        <div class="post-content markdown">
+    
+        <div class="main-content-wrap">
+            <!-- excerpt -->
+
+
+<p>前幾天有人問我一個問題，他想把一個自己創建的 tensor（而不是網絡的權重）放進 optimizer，但是 PyTorch 報錯：<code>ValueError: can&#39;t optimize a non-leaf Tensor</code>。短話長說，我決定寫一個關於反向傳播的文章，至於前面這個問題，會在中間用一節去解釋（不是解決，用一個 <code>.detach()</code> 就能解決了）。</p>
+<p>另外我先要說一點就是（可能是漢語習慣的問題），對於一個網絡，它更靠近最終輸出的部分叫「前面」，英文的 forward、network head 這些就是這個意思，靠近輸入的地方叫「後面」。</p>
+<h1 id="table-of-contents">Table of Contents</h1><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#最基本的反向傳播例子"><span class="toc-text">最基本的反向傳播例子</span></a></li><li class="toc-item toc-level-1"><a class="toc-link" href="#全連接层中的反向傳播"><span class="toc-text">全連接层中的反向傳播</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#如何簡明地實現"><span class="toc-text">如何簡明地實現</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#卷積层中的反向傳播"><span class="toc-text">卷積层中的反向傳播</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#簡單例子和代碼"><span class="toc-text">簡單例子和代碼</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#最開始的問題"><span class="toc-text">最開始的問題</span></a></li><li class="toc-item toc-level-1"><a class="toc-link" href="#池化层中的反向傳播"><span class="toc-text">池化层中的反向傳播</span></a></li></ol>
+
+
+
+<h1 id="最基本的反向傳播例子"><a href="#最基本的反向傳播例子" class="headerlink" title="最基本的反向傳播例子"></a>最基本的反向傳播例子</h1><p>我們定義一個 tensor <code>x</code>，然後對其進行一些運算：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> torch</span><br><span class="line"></span><br><span class="line">x = torch.ones(<span class="number">2</span>, <span class="number">2</span>, requires_grad=<span class="literal">True</span>)</span><br><span class="line">y = x + <span class="number">2</span></span><br><span class="line">z = y * y * <span class="number">3</span></span><br><span class="line">out = z.mean()</span><br><span class="line"></span><br><span class="line">out.backward()</span><br><span class="line">print(x.grad)</span><br></pre></td></tr></table></figure>
+
+<p>在這裡，<code>x</code> 是一個 2×2 的数組，最終輸出的結果是 <code>tensor([[4.5000, 4.5000],[4.5000, 4.5000]])</code>。我們手動計算一下這個梯度：有 \( o = \frac{1}{4}\sum_i z_i \)，且 \( z_i = 3(x_i+2)^2 \)，所以 \( \frac{\partial o}{\partial x_i} = \frac{3}{2}(x_i+2) \)，此時 <code>x=1</code>，則梯度 $$ \frac{\partial o}{\partial x_i}\bigr\rvert_{x_i=1} = \frac{9}{2} = 4.5 $$</p>
+<p>這個例子之所以簡單明瞭，是因為前一层中一個元素實際上只和前後一层中的同位置的一個元素相對應，如下所示。</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">x1 ─ y1 ─ z1 ┐</span><br><span class="line">x2 ─ y2 ─ z2 ┤</span><br><span class="line">             ├─ out</span><br><span class="line">x3 ─ y3 ─ z3 ┤</span><br><span class="line">x4 ─ y4 ─ z4 ┘</span><br></pre></td></tr></table></figure>
+
+<p>在進行到下一步之前，我們先來看一個 PyTorch 的操作。</p>
+<p>如果 <code>print(out)</code>，結果為 <code>tensor(27., grad_fn=&lt;MeanBackward0&gt;)</code>，這裡不僅可以看到它的值，還可以看到它所關聯的梯度函数，這個函数，可以通過 <code>out.grad_fn</code> 訪問，它有一個属性 <code>next_functions</code>。對於 <code>out.grad_fn.next_functions</code>，輸出的結果為 <code>((&lt;MulBackward0 object at 0x7fa140178850&gt;, 0),)</code>，如果看看 <code>z.grad_fn</code> 可以得到 <code>&lt;MulBackward0 object at 0x7fa140178850&gt;</code>。也就是說，<code>next_functions</code> 指向的就是反向傳播網絡中，某一個梯度函数的下一級的梯度函数。</p>
+<p><code>next_functions</code> 返回的第一层 tuple 內是指向的所有的下一級，也就是說，它可能指向多個函数；第二层 tuple 內的第二個元素一般是 <code>0</code>，它是反向函数的輸入值，只有返回多個可微分的值的函数（例如 <code>torch.unbind()</code>）才會使它的反向函数的這個輸入值非零。第二层 tuple 內的第一個元素如果是 <code>None</code>，說明它指向了一個常数。</p>
+<p>總之，我們可以一层一层去看這個反向傳播網絡，結果如下圖。我們可以看到，PyTorch 自動創建的這個反向網絡是一級一級的，每次只有一步操作，我們寫在一行內的操作也會自動被拆分開來。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/backward-network-automatic-built-by-pytorch.png" target="_blank" rel="noopener" title="backward network automatic built by pytorch" data-caption="backward network automatic built by pytorch" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/backward-network-automatic-built-by-pytorch.png" alt="backward network automatic built by pytorch"></a><span class="caption">backward network automatic built by pytorch</span></div><div style="clear:both;"></div>
+
+<p>最末尾的 <code>AccumulateGrad object</code> 有一個 <code>.variable</code> 属性，它指向的就是 <code>x</code>，這個後面還會提到。</p>
+<h1 id="全連接层中的反向傳播"><a href="#全連接层中的反向傳播" class="headerlink" title="全連接层中的反向傳播"></a>全連接层中的反向傳播</h1><p>對於卷積神經網絡，裡面也不排除包含全連接层。此外，一個具體而簡單的神經網絡例子，通常選擇全連接網絡，或者叫 MLP (Mutli-Layer Perceptron)。為了簡單一般只作三层：輸入层、隱藏层（hidden layer）、輸出层。其中每一個神經元，都與前後层中每個神經元相連，同樣為了簡便，在本文的例子中我們每一层只有兩個神經元，畫出結構圖如下。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/a-simple-mlp-network.png" target="_blank" rel="noopener" title="a simple MLP network" data-caption="a simple MLP network" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/a-simple-mlp-network.png" alt="a simple MLP network"></a><span class="caption">a simple MLP network</span></div><div style="clear:both;"></div>
+
+<p>這裡可以看到，與上一節不同，神經元之間的連結更複雜了，不再只是平行地連結；但是這裡也只有一次乘法（線性運算），沒有二次的項了。此外，對每一個神經元（圓圈節點），如上圖右側所示（h1 為例），除了權重 <code>w</code> 以外，還有加上一個偏置 <code>b</code>，從 <code>neth1</code> 到 <code>outh1</code>，需要經過一個可微分的激活函数，這裡我們使用 sigmoid 函数，它的表達式和微分為：<br>$$<br>\begin{aligned}<br>y = \text{sigmoid}(x) = \frac{1}{1+e^{-x}} \\<br>\frac{\partial y}{\partial x} = \frac{e^x}{({1+e^{-x})}^2} = y \cdot (1-y)<br>\end{aligned}<br>$$</p>
+<p>現在我們給定輸入值和目標（藍色），以及初始化值的權重（紅色），和初始化的偏置（黃色，假設每一层的偏置都相同，為了簡便），這樣一來，稍有常識的人都可以計算出每個神經元的激活值（綠色），如下圖所示。本文均假定對各種正向過程都已經非常了解。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/forward-pass-of-mlp.png" target="_blank" rel="noopener" title="forward pass of MLP" data-caption="forward pass of MLP" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/forward-pass-of-mlp.png" alt="forward pass of MLP"></a><span class="caption">forward pass of MLP</span></div><div style="clear:both;"></div>
+
+<p>現在我們需要計算每個權重和偏置相對於最終偏差的梯度，損失函数這裡使用 squared error function: \(E_{total} = \frac{1}{2} (target - output)^2\)，那麼 \(E_{o1} = \frac{1}{2} (target_{o1} - output_{o1})^2 = \frac{1}{2} (0.01 - 0.751)^2 = 0.2748\)，同理 \(E_{o2} = 0.0236\)。</p>
+<p>一般來說，總的損失就是二者之和，可以說是權重相等，都為 <code>1</code>。如果我們看看 PyTorch，我們總是需要在一個標量而不是向量上使用 <code>.backward()</code> 計算整個 graph 的梯度，如果在一個向量上使用會報錯 <code>RuntimeError: grad can be implicitly created only for scalar outputs</code>。對於一個輸出向量的函数 \(\vec{y}=f(\vec{x})\)，\(\vec{y}\) 相對於 \(\vec{x}\) 的梯度是一個雅可比矩陣（Jacobian Matrix）：<br>$$<br>\begin{split}<br>J =<br> \left( \begin{array}{ccc}<br> \frac{\partial y_{1}}{\partial x_{1}} &amp; \cdots &amp; \frac{\partial y_{1}}{\partial x_{n}} \\<br> \vdots &amp; \ddots &amp; \vdots \\<br> \frac{\partial y_{m}}{\partial x_{1}} &amp; \cdots &amp; \frac{\partial y_{m}}{\partial x_{n}}<br> \end{array} \right)<br>\end{split}<br>$$</p>
+<p><code>torch.autograd</code> 用於計算 Vector-Jacobian Product，它不能直接計算整個 Jacobian 矩陣。也就是說，我們需要給定一個向量 <code>v</code>，去計算 \(v^{T} \cdot J\)。如果這個 <code>v</code> 正好是某一個結果為標量的函数 \(l = g\left(\vec{y}\right)\) 的梯度，也就是說 \(v=\left(\begin{array}{ccc}\frac{\partial l}{\partial y_{1}} &amp; \cdots &amp; \frac{\partial l}{\partial y_{m}}\end{array}\right)^{T}\)，那麼根據鏈式法則，這個乘積是 \(l\) 相對於 \(\vec{x}\) 的梯度：<br>$$<br>\begin{split}<br>J^{T}\cdot v=<br> \left(\begin{array}{ccc}<br> \frac{\partial y_{1}}{\partial x_{1}} &amp; \cdots &amp; \frac{\partial y_{m}}{\partial x_{1}} \\<br> \vdots &amp; \ddots &amp; \vdots \\<br> \frac{\partial y_{1}}{\partial x_{n}} &amp; \cdots &amp; \frac{\partial y_{m}}{\partial x_{n}}<br> \end{array}\right)\left(\begin{array}{c}<br> \frac{\partial l}{\partial y_{1}} \\<br> \vdots \\<br> \frac{\partial l}{\partial y_{m}}<br> \end{array}\right)=\left(\begin{array}{c}<br> \frac{\partial l}{\partial x_{1}} \\<br> \vdots \\<br> \frac{\partial l}{\partial x_{n}}<br> \end{array}\right)<br>\end{split}<br>$$</p>
+<p>所以如果我們想在一個向量上使用 <code>vector.backward(v)</code>，我們需要傳入一個 <code>v = torch.tensor([weight1, weight2, ...])</code>，它表示的就是每一個損失在總損失中的權重（它的參数名為 <code>gradient</code>，也可以看作是這個向量對某一個外部標量的梯度）。如果我們在一個標量上使用 <code>scalar.backward()</code>，那麼無需傳入任何參数。</p>
+<p>回到開始的話題，我們現在開始計算每一個權重關於最終損失的梯度，對於輸出层的 <code>w5～w8</code>，以 <code>w5</code> 為例，首先我們有，總損失對於 <code>out o1</code> 的梯度：<br>$$<br>\frac{\partial L_{total}}{\partial out_{o1}} =<br>2 \cdot \frac{1}{2} \cdot (target_{o1} - out_{o1}) * (-1)\ +\ 0<br>= 0.7414<br>$$<br>總損失的第二項 \(E_{o2}\) 與 <code>out o1</code> 沒有關係，所以對其的梯度為 <code>0</code>。</p>
+<p>而 <code>out o1</code> 對於 <code>net o1</code>，就是 sigmoid 的梯度，\(\frac{\partial out_{o1}}{\partial net_{o1}} = out_{o1} \cdot (1 - out_{o1}) = 0.1868 \)。幾乎所有激活函数是對每一個元素單獨做的運算，不涉及相互影響（即對每一個元素，操作公式都是相同的），所以跟上一節的情況完全相同。梯度通過激活函数時，整個梯度圖的大小是不會改変的。</p>
+<p>最終，我們看 <code>net o1</code> 對於 <code>w5</code>，有 \(net_{o1} = w_5 * out_{h1}\ +\ w_6 * out_{h1}\ +\ b_2\)，所以 \(\frac{\partial net_{o1}}{\partial w_5} = out_{h1} = 0.5933\)。所以根據鏈式法則，我們把上述三項相乘，就得到總損失 <code>L</code> 對於 <code>w5</code> 的梯度 <code>0.7414 × 0.1868 × 0.5933 = 0.082</code>。</p>
+<div class="alert info"><p>如果只把前兩項相乘，我們得到 \(\frac{\partial L_{total}}{\partial net_{o1}}\)。通常，我們把總損失對某一层（或某一個神經元）未激活之前的結果（即 <code>net</code>）的導数記作 \(\delta_{layer}\)，例如這裡可記作 \(\delta_{o1}\)。</p>
+</div>
+
+<p>計算輸出层的其它權重和偏置也都類似。再看中間的隱藏层，它跟輸出层的區別就是，它的右側與多個神經元相連，所以梯度會來自於右側多條通路，所以<br>$$<br>\begin{aligned}<br>\frac{\partial L_{total}}{\partial w_1} = &amp;<br>\frac{\partial L_{total}}{\partial out_{h1}} \cdot \frac{\partial out_{h1}}{\partial net_{h1}} \cdot \frac{\partial net_{h1}}{\partial w_1} \\<br>= &amp; \left(<br>\frac{\partial L_{total}}{\partial out_{o1}} \cdot \frac{\partial out_{o1}}{\partial net_{o1}} \cdot \frac{\partial net_{o1}}{\partial out_{h1}}\ +\ \frac{\partial L_{total}}{\partial out_{o2}} \cdot \frac{\partial out_{o2}}{\partial net_{o2}} \cdot \frac{\partial net_{o2}}{\partial out_{h1}}<br>\right) \\<br>&amp; \cdot \frac{\partial out_{h1}}{\partial net_{h1}} \cdot \frac{\partial net_{h1}}{\partial w_1} \\<br>= &amp; (sum_o \delta_o \cdot w_{ho}) \times out_{h1} (1 - out_{h1}) \times i_1 \\<br>= &amp; 0.0364 \times 0.2413 \times 0.05 = 0.000439<br>\end{aligned}<br>$$</p>
+<p>看著很恐怖，其實並不複雜。以第二行加號左邊的三項為例，前兩項 \(\delta_{o1}\) 上面已經算過了；第三項仍然有 \(net_{o1} = w_5 * out_{h1}\ +\ w_6 * out_{h1}\ +\ b_2\)，所以 \(\frac{\partial net_{o1}}{\partial out_{h1}} = w_5 = 0.40\)，由於這都是一次線性的運算，所以對權重求導就得輸入，對輸入求導就得權重；對於第三行，第一項是激活函数，和上面也一樣，最後一項是對權重求導，所以得輸入值 <code>i1</code>。</p>
+<p>這裡也看到一件事，就是越往後梯度越來越小了，因為乘上小於一的項越來越多，「梯度消失」說的就是這麼回事。</p>
+<h2 id="如何簡明地實現"><a href="#如何簡明地實現" class="headerlink" title="如何簡明地實現"></a>如何簡明地實現</h2><p>顯然對於每一個權重，我們不應當從損失函数開始一個一個地計算到最後，而是應當先計算一級（輸出层），然後把一些計算結果傳給前一級（隱藏层），然後前一級拿到這個結果只需計算和他直接相連的部分。實際使用上，全連接层也是一個整體，肯定不會一個一個神經元單獨計算。</p>
+<p>我們在得到 [\(\delta_{o1}\), \(\delta_{o2}\)] 之後，可以作為一個整體傳給後一层，然後做一個矩陣乘法 \(\cdot \begin{bmatrix} w_5 &amp; w_6 \\ w_7 &amp; w_8 \end{bmatrix}\)。</p>
+<ul>
+<li><p>對於純公式的推導，可以參考 <a href="https://zhuanlan.zhihu.com/p/39195266" target="_blank" rel="noopener">反向传播算法推导-全连接神经網络</a></p>
+</li>
+<li><p>對於易懂的代碼，可以參考 <a href="https://machinelearningmastery.com/implement-backpropagation-algorithm-scratch-python/" target="_blank" rel="noopener">How to Code a Neural Network with Backpropagation In Python (from scratch)</a></p>
+</li>
+</ul>
+<h1 id="卷積层中的反向傳播"><a href="#卷積层中的反向傳播" class="headerlink" title="卷積层中的反向傳播"></a>卷積层中的反向傳播</h1><p>卷積层自然是卷積神經網絡的關鍵，所以這一部分先會說得比較抽象和泛化。對於卷積层，在運算上與上一節沒有什麼不同，所以我們可以預料對權重求導就得輸入，對輸入求導就得權重還是一樣的。區別在於前後的連結方式，卷積层是稀疏的連接，一個神經元並不會和後一級所有神經元相連，此外，權重會有復用，所以不同的連線，不表示這個連線上的權重不同，如下圖。當卷積核大小等於輸入圖時，卷積层就変為一個全連接层，所以這裡會是上面一節進一步抽象、泛化的反向傳播方式。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/connection-in-forward-pass-of-conv.png" target="_blank" rel="noopener" title="forward pass of conv" data-caption="forward pass of conv" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/connection-in-forward-pass-of-conv.png" alt="forward pass of conv"></a><span class="caption">forward pass of conv</span></div><div style="clear:both;"></div>
+
+<div class="alert info"><p><strong>符號說明：</strong></p>
+<ol>
+<li><p>卷積核 \(w\) 的尺寸為 \(k_1 \times k_2\)，\(w_{m,n}^l\) 表示這個卷積核內通道為 \(l\)，位置為 \(m, n\) 的參数值。</p>
+</li>
+<li><p>\(x_{i,j}^l\) 表示一個卷積的結果，它是由上一层的輸出與卷積核權重相乘加上偏置值得到。輸入特徵圖 \(O\)（即進行卷積之前的）的尺寸使用 \(H \times W\) 表示， \(i, j\) 為特徵圖上的某一個位置。<br>$$<br>x_{i,j}^l = \sum_{m = 0}^{k_1 - 1} \sum_{n = 0}^{k_2 - 1} w_{m,n}^l o_{i + m,j + n}^{l-1} + b^l<br>$$</p>
+</li>
+<li><p>\(o_{i,j}^l\) 為激活函数的輸出值，即 \(o_{i,j}^l = f(x_{i,j}^{l})\)，\(f(\cdot)\) 表示某種激活函数。</p>
+</li>
+</ol>
+</div>
+
+
+<p>假設進行的是 <code>padding=0, stride=1</code> 的卷積，那麼正向過程如符號說明內的公式，\(\delta w_{m^{\prime},n^{\prime}}^l\) 為<br>$$<br>\frac{\partial L}{\partial w_{m^{\prime},n^{\prime}}^l} = \sum_{i=0}^{H-k_1} \sum_{j=0}^{W-k_2} \frac{\partial L}{\partial x_{i,j}^{l}} \frac{\partial x_{i,j}^{l}}{\partial w_{m^{\prime},n^{\prime}}^l} \tag{1}<br>$$</p>
+<p>這裡的 \(x_{i,j}^l\) 就是上一節中的 <code>net</code> 层中的元素，比如 <code>net h1</code>、<code>net o1</code>。所以這個公式表示的就是直達權重的最後一步，第二項類似於之前的 \(\frac{\partial net_{h1}}{\partial w_1}\)，第一項 \(\delta x_{i,j}^{l}\) 如前所述是從前方层傳遞過來的，在這裡是個已知值。積分的區域為卷積核上的這個參数觸及的區域。</p>
+<p>又有<br>$$<br>x_{i,j}^l = \sum_{m = 0}^{k_1 - 1} \sum_{n = 0}^{k_2 - 1} w_{m,n}^l o_{i + m,j + n}^{l-1} + b^l<br>$$</p>
+<p>所以第二項有<br>$$<br>\frac{\partial x_{i,j}^{l}}{\partial w_{m^{\prime},n^{\prime}}^l} = \frac{\partial}{\partial w_{m^{\prime},n^{\prime}}^l}\left( \sum_{m} \sum_{n} w_{m,n}^{l}o_{i+m, j+n}^{l-1} + b^l \right)<br>$$</p>
+<p>繼續進一步展開，卷積核內的每一個權重顯然是獨立的，前一层的輸出 <code>o</code> 顯然也不受這個卷積核的影響，所以展開後，只有一項求偏導不為零<br>$$<br>\begin{align}<br>\frac{\partial x_{i,j}^{l}}{\partial w_{m^{\prime},n^{\prime}}^l} &amp;= \frac{\partial}{\partial w_{m’,n’}^l}\left( w_{0,0}^{l} o_{ i + 0, j + 0}^{l-1} + \dots + w_{m’,n’}^{l} o_{ i + m^{\prime}, j + n^{\prime}}^{l-1} + \dots + b^l\right) \\<br>&amp; = \frac{\partial}{\partial w_{m^{\prime},n^{\prime}}^l}\left( w_{m^{\prime},n^{\prime}}^{l} o_{ i + m^{\prime}, j + n^{\prime}}^{l-1}\right) \\<br>&amp; = o_{i+m^{\prime},j+n^{\prime}}^{l-1}<br>\end{align}<br>$$</p>
+<p>把這個結論代入最開始的公式（1）：<br>$$<br>\frac{\partial L}{\partial w_{m’,n’}^l} = \sum_{i=0}^{H-k_1} \sum_{j=0}^{W-k_2} \delta x_{i,j}^{l} \cdot o_{ i + m^{\prime}, j + n^{\prime}}^{l-1} \tag{2}<br>$$</p>
+<p>這個式子裡面雙重求和就是權重共享的結果，隨著 <code>k1</code>，<code>k2</code> 的增大，卷積核的大小逐漸接近於輸入特徵圖，這個求和區域也逐漸減小。當核的大小等於特徵圖大小時，這個式子與上一節中的全連接的形式相同。同時我們對比一下最開始的卷積公式：<br>$$<br>x_{i,j}^l = \sum_{m = 0}^{k_1 - 1} \sum_{n = 0}^{k_2 - 1} w_{m,n}^l o_{i + m,j + n}^{l-1} + b^l<br>$$</p>
+<p>就發現這個（gradients of L w.r.t to the weight）求導的公式其實就是個卷積操作，輸入是 \(O^{l-1}\)，卷積核是前方层傳來的梯度圖（gradients of L w.r.t to the feature maps），表示特徵圖上一個值的変動，會對損失值造成多大影響。這個梯度圖顯然也不是憑空產生的，我們現在就還要計算它。</p>
+<p>對於一個 \(x_{i,j}^l\)，它在 <code>l+1</code> 层中的影響區域是左上角 \(\left(i^{\prime}-k_1+1,j^{\prime}-k_2+1 \right)\) 到右下角 \(\left(i^{\prime},j^{\prime} \right)\) 中間的矩形區域。那麼</p>
+<p>$$<br>\begin{align}<br>\frac{\partial L}{\partial x_{i’,j’}^{l}} &amp;= \sum_{m = 0}^{k_1 -1} \sum_{n = 0}^{k_2 -1} \frac{\partial E}{\partial x_{i’-m, j’-n}^{l+1}}\frac{\partial x_{i’-m, j’-n}^{l+1}}{\partial x_{i’,j’}^l} \\<br>&amp;= \sum_{m = 0}^{k_1 -1} \sum_{n = 0}^{k_2 -1} \delta_{i’-m, j’-n}^{l+1} \frac{\partial x_{i’-m, j’-n}^{l+1}}{\partial x_{i’,j’}^l} \tag{3} \\<br>\end{align}<br>$$</p>
+<p>還是一樣地看第二項，展開裡面的 <code>x</code>：<br>$$<br>\begin{align}<br>\frac{\partial x_{i’-m,j’-n}^{l+1}}{\partial x_{i’,j’}^l} &amp;= \frac{\partial}{\partial x_{i’,j’}^l} \left( \sum_{m’=0}^{k_1^{l+1} -1} \sum_{n’=0}^{k_2^{l+1} -1} w_{m’, n’}^{l+1} o_{i’ - m + m’,j’ - n + n’}^{l} + b^{l+1} \right) \\<br>&amp;= \frac{\partial}{\partial x_{i’,j’}^l}\left( \sum_{m’=0}^{k_1^{l+1} -1} \sum_{n’=0}^{k_2^{l+1} -1} w_{m’,n’}^{l+1}f\left(x_{i’ - m + m’,j’ - n + n’}^{l}\right) + b^{l+1} \right)<br>\end{align}<br>$$</p>
+<p>繼續展開兩個求和，在這裡同樣，下一层的權重不會受這一层的特徵圖的影響，一個特徵圖之內的各個值也是獨立的，所以它們的偏導都為零：<br>$$<br>\begin{align}<br>\frac{\partial x_{i^{\prime} - m,j^{\prime} - n}^{l+1}}{\partial x_{i’,j’}^l}<br>&amp;= \frac{\partial}{\partial x_{i’,j’}^l}\left( w_{m’,n’}^{l+1} f(x_{ 0 - m + m’, 0 - n + n’}^{l}) + \dots + w_{m,n}^{l+1} f(x_{i’,j’}^{l}) + \dots + b^{l+1}\right) \\<br>&amp;= \frac{\partial}{\partial x_{i’,j’}^l}\left( w_{m,n}^{l+1} f(x_{i’,j’}^{l}) \right) \\<br>&amp;= w_{m,n}^{l+1} \frac{\partial}{\partial x_{i’,j’}^l} \left( f(x_{i’,j’}^{l}) \right) \\<br>&amp;= w_{m,n}^{l+1} f’(x_{i’,j’}^{l})<br>\end{align}<br>$$</p>
+<p>把這個結論代回開始的公式（3）：<br>$$<br>\frac{\partial E}{\partial x_{i’,j’}^{l}} =<br>f’(x_{i’,j’}^{l}) \cdot \sum_{m = 0}^{k_1^{l+1} - 1} \sum_{n = 0}^{k_2^{l+1} - 1} \delta_{i’-m, j’-m}^{l+1} w_{m,n}^{l+1} \tag{4}<br>$$</p>
+<p>這同樣是一個卷積，只是 <code>i-m, j-n</code> 表示我們需要把卷積核反轉 180 度。這個卷積的輸入是更前面层傳回的 \(\delta_{i’-m, j’-m}^{l+1}\)，卷積核是 <code>l+1</code> 层的權重，而 \(f’(x_{i’,j’}^{l})\) 這個激活函数的導数是個常数，前面也提到了，它是對每個元素單獨做的。</p>
+<p>公式（2）和（4）就是反向傳播的核心，前者用於更新參数，後者用於將對總損失的梯度向後傳播，用於後一层的計算。同時，這裡我們看到，卷積求梯度也是由卷積完成，所以有些地方會說反卷積就是用卷積的梯度。</p>
+<h2 id="簡單例子和代碼"><a href="#簡單例子和代碼" class="headerlink" title="簡單例子和代碼"></a>簡單例子和代碼</h2><p>上述分析可以看出，形式都是類似的，但是有點抽象，這裡我們看一個具體的例子幫助理解。下面的圖是一個卷積的正向過程，這裡我們略去 bias。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/forward-pass-of-conv.png" target="_blank" rel="noopener" title="foward pass of a simple conv example" data-caption="foward pass of a simple conv example" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/forward-pass-of-conv.png" alt="foward pass of a simple conv example"></a><span class="caption">foward pass of a simple conv example</span></div><div style="clear:both;"></div>
+
+<p>$$<br>\begin{align}<br>X_{11} = W_{11} O_{11} + W_{12} O_{12} + W_{21} O_{21} + W_{22} O_{22} \\<br>X_{12} = W_{11} O_{12} + W_{12} O_{13} + W_{21} O_{22} + W_{22} O_{23} \\<br>X_{21} = W_{11} O_{21} + W_{12} O_{22} + W_{21} O_{31} + W_{22} O_{32} \\<br>X_{22} = W_{11} O_{22} + W_{12} O_{23} + W_{21} O_{32} + W_{22} O_{33} \\<br>\end{align}<br>$$</p>
+<p>把上面四個式子加在一起，然後分別對四個參数求偏導，可得</p>
+<p>$$<br>\begin{align}<br>\frac{\partial L}{\partial W_{11}} = \frac{\partial L}{\partial X_{11}} \frac{\partial X_{11}}{\partial W_{11}} + \frac{\partial L}{\partial X_{12}} \frac{\partial X_{12}}{\partial W_{11}} + \frac{\partial L}{\partial X_{21}} \frac{\partial X_{21}}{\partial W_{11}} + \frac{\partial L}{\partial X_{22}} \frac{\partial X_{22}}{\partial W_{11}} \\<br>\frac{\partial L}{\partial W_{12}} = \frac{\partial L}{\partial X_{11}} \frac{\partial X_{11}}{\partial W_{12}} + \frac{\partial L}{\partial X_{12}} \frac{\partial X_{12}}{\partial W_{12}} + \frac{\partial L}{\partial X_{21}} \frac{\partial X_{21}}{\partial W_{12}} + \frac{\partial L}{\partial X_{22}} \frac{\partial X_{22}}{\partial W_{12}} \\<br>\frac{\partial L}{\partial W_{21}} = \frac{\partial L}{\partial X_{11}} \frac{\partial X_{11}}{\partial W_{21}} + \frac{\partial L}{\partial X_{12}} \frac{\partial X_{12}}{\partial W_{21}} + \frac{\partial L}{\partial X_{21}} \frac{\partial X_{21}}{\partial W_{12}} + \frac{\partial L}{\partial X_{22}} \frac{\partial X_{22}}{\partial W_{21}} \\<br>\frac{\partial L}{\partial W_{22}} = \frac{\partial L}{\partial X_{11}} \frac{\partial X_{11}}{\partial W_{22}} + \frac{\partial L}{\partial X_{12}} \frac{\partial X_{12}}{\partial W_{22}} + \frac{\partial L}{\partial X_{21}} \frac{\partial X_{21}}{\partial W_{22}} + \frac{\partial L}{\partial X_{22}} \frac{\partial X_{22}}{\partial W_{22}} \\<br>\end{align}<br>$$</p>
+<p>我們在之前已經知道，\(\frac{\partial X}{\partial W} = O\)，所以上面的式子可以寫成<br>$$<br>\begin{align}<br>\frac{\partial L}{\partial W_{11}} = \frac{\partial L}{\partial X_{11}} O_{11} + \frac{\partial L}{\partial X_{12}} O_{12} + \frac{\partial L}{\partial X_{21}} O_{21} + \frac{\partial L}{\partial X_{22}} O_{22} \\<br>\frac{\partial L}{\partial W_{12}} = \frac{\partial L}{\partial X_{11}} O_{12} + \frac{\partial L}{\partial X_{12}} O_{13} + \frac{\partial L}{\partial X_{21}} O_{22} + \frac{\partial L}{\partial X_{22}} O_{23} \\<br>\frac{\partial L}{\partial W_{21}} = \frac{\partial L}{\partial X_{11}} O_{21} + \frac{\partial L}{\partial X_{12}} O_{22} + \frac{\partial L}{\partial X_{21}} O_{31} + \frac{\partial L}{\partial X_{22}} O_{32} \\<br>\frac{\partial L}{\partial W_{22}} = \frac{\partial L}{\partial X_{11}} O_{22} + \frac{\partial L}{\partial X_{12}} O_{23} + \frac{\partial L}{\partial X_{21}} O_{32} + \frac{\partial L}{\partial X_{22}} O_{33} \\<br>\end{align}<br>$$</p>
+<p>如果仔細看看，這個形式，其實就是卷積，卷積的輸入是正向過程相同的輸入，卷積核是從後一层傳過來的梯度圖，如下圖所示。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/weight-gradient-calc.png" target="_blank" rel="noopener" title="weight gradient calculation as conv" data-caption="weight gradient calculation as conv" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/weight-gradient-calc.png" alt="weight gradient calculation as conv"></a><span class="caption">weight gradient calculation as conv</span></div><div style="clear:both;"></div>
+
+<p>現在我們得到了卷積核 <code>W</code> 的每個元素對於最終損失的梯度，我們可以更新這個卷積核的參数了。同樣，下一件事是，得到輸入特徵圖 <code>O</code> 上每個元素關於最終損失的梯度，這樣我們才可以把這個梯度繼續向後傳播。</p>
+<p>同樣把四個式子相加，然後求偏導，結果如下：<br>$$<br>\begin{align}<br>\frac{\partial L}{\partial O_{11}} = \frac{\partial L}{\partial X_{11}} W_{11} + \frac{\partial L}{\partial X_{12}} \cdot 0 + \frac{\partial L}{\partial X_{21}} \cdot 0 + \frac{\partial L}{\partial X_{22}} \cdot 0 \\<br>\frac{\partial L}{\partial O_{12}} = \frac{\partial L}{\partial X_{11}} W_{12} + \frac{\partial L}{\partial X_{12}} W_{11} + \frac{\partial L}{\partial X_{21}} \cdot 0 + \frac{\partial L}{\partial X_{22}} \cdot 0 \\<br>\frac{\partial L}{\partial O_{13}} = \frac{\partial L}{\partial X_{11}} \cdot 0 + \frac{\partial L}{\partial X_{12}} W_{12} + \frac{\partial L}{\partial X_{21}} \cdot 0 + \frac{\partial L}{\partial X_{22}} \cdot 0 \\<br>\frac{\partial L}{\partial O_{21}} = \frac{\partial L}{\partial X_{11}} W_{21} + \frac{\partial L}{\partial X_{12}} \cdot 0 + \frac{\partial L}{\partial X_{21}} W_{11} + \frac{\partial L}{\partial X_{22}} \cdot 0 \\<br>\frac{\partial L}{\partial O_{22}} = \frac{\partial L}{\partial X_{11}} W_{22} + \frac{\partial L}{\partial X_{12}} W_{21} + \frac{\partial L}{\partial X_{21}} W_{12} + \frac{\partial L}{\partial X_{22}} W_{11} \\<br>\frac{\partial L}{\partial O_{23}} = \frac{\partial L}{\partial X_{11}} \cdot 0 + \frac{\partial L}{\partial X_{12}} W_{22} + \frac{\partial L}{\partial X_{21}} \cdot 0 + \frac{\partial L}{\partial X_{22}} W_{11} \\<br>\frac{\partial L}{\partial O_{31}} = \frac{\partial L}{\partial X_{11}} \cdot 0 + \frac{\partial L}{\partial X_{12}} \cdot 0 + \frac{\partial L}{\partial X_{21}} W_{21} + \frac{\partial L}{\partial X_{22}} W_{11} \\<br>\frac{\partial L}{\partial O_{32}} = \frac{\partial L}{\partial X_{11}} \cdot 0 + \frac{\partial L}{\partial X_{12}} \cdot 0 + \frac{\partial L}{\partial X_{21}} W_{22} + \frac{\partial L}{\partial X_{22}} W_{21} \\<br>\frac{\partial L}{\partial O_{33}} = \frac{\partial L}{\partial X_{11}} \cdot 0 + \frac{\partial L}{\partial X_{12}} \cdot 0 + \frac{\partial L}{\partial X_{21}} \cdot 0 + \frac{\partial L}{\partial X_{22}} W_{22} \\<br>\end{align}<br>$$</p>
+<p>這看起來顯然也是一種卷積操作，有人把它叫做全卷積（完全的「全」，不是全部的「全」），示意圖在下面，簡單說就是 <code>padding = 1</code>。這裡我們需要用到正向過程中的卷積核，將它旋轉 180 度後使用。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/input-gradient-calc.png" target="_blank" rel="noopener" title="input gradient calculation as full conv" data-caption="input gradient calculation as full conv" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/input-gradient-calc.png" alt="input gradient calculation as full conv"></a><span class="caption">input gradient calculation as full conv</span></div><div style="clear:both;"></div>
+
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/full-conv-operation.png" target="_blank" rel="noopener" title="full conv operation schematic diagram" data-caption="full conv operation schematic diagram" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/full-conv-operation.png" alt="full conv operation schematic diagram"></a><span class="caption">full conv operation schematic diagram</span></div><div style="clear:both;"></div>
+
+<p>這裡有一個簡單的代碼描述上面的過程</p>
+<script src="//gist.github.com/f65a80582f45981ca30edbbf1b6dbd35.js"></script>
+
+
+
+<h1 id="最開始的問題"><a href="#最開始的問題" class="headerlink" title="最開始的問題"></a>最開始的問題</h1><p>從上面我們可以看出，在反向傳播的過程中，除了損失對參数的梯度是必須要計算以及儲存之外，我們還必須計算一個損失對特徵圖的梯度，並且要把它傳給後一层。</p>
+<p>什麼是葉子節點，直觀就是就是不在「莖」上的，後續沒有其它節點的節點，其實是個很常見的概念。在這裡說人話就是直接由用戶創建，而不是從另一個節點計算得到的節點（A leaf Variable is a variable that is at the beginning of the graph）。神經網絡中的參数都是 <code>leaf tensor</code>，而中間的所有特徵圖和輸出都不是 <code>leaf tensor</code>，輸入圖可以是，但是一般沒人計算它的梯度。巧的是問我那個問題就是因為他的優化對象是輸入圖像（可視化、風格遷移這些任務上有時需這樣做）。在 PyTorch 上，如果一個 CPU Tensor 是 <code>requires_grad=True</code> 的，那麼用 <code>.to(device)</code> 將它發送到 GPU 的時候會產生一個關聯操作 <code>grad_fn=&lt;CopyBackwards&gt;</code>，要解決的話可以 <code>.to(device).detach().requires_grad_(True)</code>。</p>
+<p>為何 optimizer 只能對葉子節點進行梯度下降？因為幾乎所有的深度學習框架，都不會儲存非葉子節點的梯度，它的梯度在傳遞給所有相連的後方层之後就被刪除了，沒有紀錄下梯度自然沒法進行梯度下降。那為何不儲存呢，回到最開始的雅可比矩陣，對於一個 tensor function，假設 <code>H = H′ = W = W′ = 32 and C = C′ = 128</code>，那麼這個雅可比矩陣內的元素数是 <code>H′W′C′HWC ≈ 17 × 10e9</code> 個，需要約 68GB 進行單精度儲存，所以 <code>.backward()</code> 一定是在一個標量上進行（或者說計算的是 Vector-Jacobian Product）。對於一個標量的梯度，矩陣大小就只有 <code>HWC</code> 大小，大約是百 MB 的級別，但是還考慮到 batch size，和各種 skip-connection，這個總大小還是很可觀的。而且現代網絡都是幾百层隨隨便便，絕對沒可能全部儲存下來。</p>
+<div class="figure fig-50" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/forward-network-for-dag.png" target="_blank" rel="noopener" title="forward network for a DAG" data-caption="forward network for a DAG" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/forward-network-for-dag-preview.png" alt="forward network for a DAG"></a><span class="caption">forward network for a DAG</span></div>
+<div class="figure fig-50" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/backward-network-for-dag.png" target="_blank" rel="noopener" title="backward network for a DAG" data-caption="backward network for a DAG" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-backward-in-convnet/backward-network-for-dag-preview.png" alt="backward network for a DAG"></a><span class="caption">backward network for a DAG</span></div>
+<div style="clear:both;"></div>
+
+<p>如果要判斷一個 tensor 是不是葉子節點，可以使用 <code>tensor.is_leaf</code>，對於葉子節點，它會在反向圖中創建一個 <code>AccumulateGrad object</code>，也就是我們第一節中提到的，表示在這裡累積梯度。</p>
+<p>如果需要獲得一個中間值的梯度，可以使用 <a href="https://pytorch.org/docs/master/autograd.html#torch.Tensor.retain_grad" target="_blank" rel="noopener">retain_grad</a>，或者更複雜的可以用 <a href="https://pytorch.org/docs/master/autograd.html#torch.Tensor.register_hook" target="_blank" rel="noopener">register_hook</a>。</p>
+<p>這裡再說一個關於 optimizer、grad 和 weight decay 的事。一般來說，weight decay（權值衰減）是說要在 loss 上加上一項，使得網絡的參数小一點，防止過擬合。如果使用 L2 regularization，那麼總的 loss 為：<br>$$<br>\text{Regularized Loss} = \text{Loss} + \lambda \sum_i {\omega}_i^2<br>$$</p>
+<p>在 PyTorch 中，weight decay 的參数是傳給 optimizer 的，它是在更新參数時才用這一項，會把某一個參数的梯度 <a href="https://github.com/pytorch/pytorch/blob/master/torch/optim/sgd.py#L98" target="_blank" rel="noopener">乘以 <code>(1 + weight_decay)</code></a>。這麼做也是因為參数和參数之間是獨立的，求導之後如下式（係数 <code>2</code> 可以忽略）。<br>$$<br>\text{updated weight}_i = \text{weight}_i - lr \times \alpha (grad_i + 2 \lambda {\omega}_i)<br>$$</p>
+<h1 id="池化层中的反向傳播"><a href="#池化层中的反向傳播" class="headerlink" title="池化层中的反向傳播"></a>池化层中的反向傳播</h1><p>眾所周知池化层中是沒有可學習的參数的，所以這裡只看對於特徵圖上的值的梯度怎麼通過。從前面傳來一個 <code>C × H × W</code> 大小的梯度圖，要往後傳一個 <code>C × nH × nW</code> 的梯度圖。</p>
+<ul>
+<li><p>最大值池化，前向過程中會紀錄每一個 bin 中最大值的位置，在反向過程中，梯度會賦給之前紀錄的位置，bin 中的其它位置填 <code>0</code>。</p>
+</li>
+<li><p>平均值池化，梯度會縮小 <code>n × n</code> 倍然後賦給一個 bin 內所有位置，即每個 bin 內梯度相同。</p>
+</li>
+</ul>
+<br/>
+
+<p>後話：自定義一個網絡层，例如 RoIPooling 這些，主要是要將損失對特徵圖的梯度計算出來然後向後傳出，對於一些有參数的层，還需要計算出對參数的梯度，儲存在 tensor 的 <code>.grad</code> 属性中傳給 optimizer。</p>
+<p>我沒想到寫這個畫圖排版之類的居然花了兩天時間，早知如此就不寫了。。（這好像是絕大多說要寫的東西的下場，我去年居然還說要寫一些關於色彩科學計算攝影之類的？？對了，我最近好一陣在研究 🎞️，並魔改一個拍立得給中片幅膠片機做後背，真的很好玩）</p>
+<p><strong>參考資料：</strong></p>
+<ol>
+<li><p><a href="https://pytorch.org/tutorials/beginner/blitz/autograd_tutorial.html" target="_blank" rel="noopener">Deep Learning with PyTorch: A 60 Minute Blitz &gt; Autograd: Automatic Differentiation</a></p>
+</li>
+<li><p><a href="https://mattmazur.com/2015/03/17/a-step-by-step-backpropagation-example/" target="_blank" rel="noopener">A Step by Step Backpropagation Example</a></p>
+</li>
+<li><p><a href="https://www.jefkine.com/general/2016/09/05/backpropagation-in-convolutional-neural-networks/" target="_blank" rel="noopener">Backpropagation In Convolutional Neural Networks</a></p>
+</li>
+<li><p><a href="https://medium.com/@2017csm1006/forward-and-backpropagation-in-convolutional-neural-network-4dfa96d7b37e" target="_blank" rel="noopener">Forward And Backpropagation in Convolutional Neural Network</a></p>
+</li>
+<li><p><a href="https://becominghuman.ai/back-propagation-in-convolutional-neural-networks-intuition-and-code-714ef1c38199" target="_blank" rel="noopener">Back Propagation in Convolutional Neural Networks — Intuition and Code</a></p>
+</li>
+<li><p><a href="https://www.vlfeat.org/matconvnet/matconvnet-manual.pdf" target="_blank" rel="noopener">Manual of MatConvNet: CNNs for MATLAB</a></p>
+</li>
+<li><p><a href="https://www.cnblogs.com/pinard/p/6494810.html" target="_blank" rel="noopener">卷积神经網络(CNN)反向传播算法</a></p>
+</li>
+</ol>
+<br/>
+            
+
+
+        </div>
+    </div>
+    <div id="post-footer" class="post-footer main-content-wrap">
+        
+            <div class="post-footer-tags">
+                <span class="text-color-light text-small">TAGGED IN</span><br/>
+                
+    <a class="tag tag--primary tag--small t-link" href="/tags/Backpropagation/" rel="tag">Backpropagation</a> <a class="tag tag--primary tag--small t-link" href="/tags/Computer-Vision/" rel="tag">Computer Vision</a> <a class="tag tag--primary tag--small t-link" href="/tags/Deep-Learning/" rel="tag">Deep Learning</a> <a class="tag tag--primary tag--small t-link" href="/tags/PyTorch/" rel="tag">PyTorch</a>
+
+            </div>
+        
+        
+            <div class="post-actions-wrap">
+    <nav>
+        <ul class="post-actions post-action-nav">
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/yolo-from-v1-to-v4/"
+                    data-tooltip="实时目标检测方法 YOLO — 从 V1 到 V4"
+                    aria-label="PREVIOUS: 实时目标检测方法 YOLO — 从 V1 到 V4"
+                >
+                    
+                        <i class="fa fa-angle-left" aria-hidden="true"></i>
+                        <span class="hide-xs hide-sm text-small icon-ml">PREVIOUS</span>
+                    </a>
+            </li>
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/posts/simple-thoughts-on-chinese-characters/"
+                    data-tooltip="漢字雜談"
+                    aria-label="NEXT: 漢字雜談"
+                >
+                    
+                        <span class="hide-xs hide-sm text-small icon-mr">NEXT</span>
+                        <i class="fa fa-angle-right" aria-hidden="true"></i>
+                    </a>
+            </li>
+        </ul>
+    </nav>
+    <ul class="post-actions post-action-share">
+        <li class="post-action hide-lg hide-md hide-sm">
+            <a
+                class="post-action-btn btn btn--default btn-open-shareoptions"
+                href="#btn-open-shareoptions"
+                aria-label="Share this post"
+            >
+                <i class="fa fa-share-alt" aria-hidden="true"></i>
+            </a>
+        </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/backward-in-convolutional-neural-networks/"
+                    title="Share on Facebook"
+                    aria-label="Share on Facebook"
+                >
+                    <i class="fab fa-facebook" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/backward-in-convolutional-neural-networks/"
+                    title="Share on Twitter"
+                    aria-label="Share on Twitter"
+                >
+                    <i class="fab fa-twitter" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/backward-in-convolutional-neural-networks/"
+                    title="Share on Weibo"
+                    aria-label="Share on Weibo"
+                >
+                    <i class="fab fa-weibo" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/backward-in-convolutional-neural-networks/&amp;title=卷積神經網絡中的反向傳播"
+                    title="Share on QQ"
+                    aria-label="Share on QQ"
+                >
+                    <i class="fab fa-qq" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+        
+            
+                <li class="post-action">
+                    <a
+                        class="post-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                        <i class="fa fa-comment"></i>
+                    </a>
+                </li>
+            
+        
+        <li class="post-action">
+            
+                <a class="post-action-btn btn btn--default" href="#table-of-contents" aria-label="Table of Contents">
+            
+                <i class="fa fa-list" aria-hidden="true"></i>
+            </a>
+        </li>
+    </ul>
+</div>
+
+
+        
+        
+            
+                <div id="gitalk"></div>
+
+            
+        
+    </div>
+</article>
+
+
+
+                <footer id="footer" class="main-content-wrap">
+    <span class="copyrights">
+        Copyrights &copy; 2021 Tang Huan. All Rights Reserved.
+    </span>
+</footer>
+
+            </div>
+            
+                <div id="bottom-bar" class="post-bottom-bar" data-behavior="4">
+                    <div class="post-bar-actions-wrap">
+    <div class="post-actions post-action-share">
+        <div class="post-action">
+            
+                <a class="post-bar-action-btn btn btn--default" href="#table-of-contents" aria-label="Table of Contents">
+            
+                <i class="fas fa-angle-up" aria-hidden="true"></i>
+            </a>
+        </div>
+        
+            
+                <div class="post-action">
+                    <a 
+                        class="post-bar-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                         <i class="fas fa-angle-down"></i>
+                    </a>
+                </div>
+            
+        
+    </div>
+</div>
+                </div>
+                
+    <div id="share-options-bar" class="share-options-bar" data-behavior="4">
+        <i id="btn-close-shareoptions" class="fa fa-times"></i>
+        <ul class="share-options">
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/backward-in-convolutional-neural-networks/"
+                        aria-label="Share on Facebook"
+                    >
+                        <i class="fab fa-facebook" aria-hidden="true"></i><span>Share on Facebook</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/backward-in-convolutional-neural-networks/"
+                        aria-label="Share on Twitter"
+                    >
+                        <i class="fab fa-twitter" aria-hidden="true"></i><span>Share on Twitter</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/backward-in-convolutional-neural-networks/"
+                        aria-label="Share on Weibo"
+                    >
+                        <i class="fab fa-weibo" aria-hidden="true"></i><span>Share on Weibo</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/backward-in-convolutional-neural-networks/&amp;title=卷積神經網絡中的反向傳播"
+                        aria-label="Share on QQ"
+                    >
+                        <i class="fab fa-qq" aria-hidden="true"></i><span>Share on QQ</span>
+                    </a>
+                </li>
+            
+        </ul>
+    </div>
+
+
+            
+        </div>
+        
+
+
+    
+        
+    
+
+<div id="about">
+    <div id="about-card">
+        <div id="about-btn-close">
+            <i class="fa fa-times"></i>
+        </div>
+        
+            <img id="about-card-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+            <h4 id="about-card-name">Tang Huan</h4>
+        
+            <div id="about-card-bio"></div>
+        
+        
+            <div id="about-card-job">
+                <i class="fa fa-briefcase"></i>
+                <br/>
+                
+            </div>
+        
+        
+            <div id="about-card-location">
+                <i class="fa fa-map-marker-alt"></i>
+                <br/>
+                Shanghai
+            </div>
+        
+    </div>
+</div>
+
+        
+        
+<div id="cover" style="background-image:url('/assets/images/cover.jpg');"></div>
+        
+
+<!--SCRIPTS-->
+
+<script src="/assets/js/script-21vlobaq8sfmdbypn0z91hl6jyot6shixuux8ijser2jcbktmikbwlb6yvjx.min.js"></script>
+
+<!--SCRIPTS END-->
+
+
+    
+      <script type="text/javascript">
+        (function() {
+          function render() {
+            new Gitalk({
+              clientID: 'b7b365f41dbbfaaf9b88',
+              clientSecret: '25de272b8030e3c498dd56b883e4386d881b6d62',
+              repo: 'tangh.github.io',
+              owner: 'tangh',
+              admin: ['tangh'],
+              id: 'articles/backward-in-convolutional-neural-networks',
+              title: document.title.replace(' - 雨天等放晴', ''),
+              ...{"language":"en","perPage":10,"distractionFreeMode":false,"enableHotKey":true,"pagerDirection":"first","createIssueManually":true}
+            }).render('gitalk');
+          }
+          var gc = document.createElement('script');
+          gc.type = 'text/javascript';
+          gc.src = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js';
+          gc.charset = 'UTF-8';
+          gc.onload = render;
+          gc.async = true;
+          document.querySelector('body').appendChild(gc);
+          var gcs = document.createElement('link');
+          gcs.href = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.css';
+          gcs.type = 'text/css';
+          gcs.rel = 'stylesheet';
+          gcs.media = 'screen,print';
+          document.querySelector('head').appendChild(gcs);
+        })();
+      </script>
+    
+
+
+
+
+    <script>!function(e){var c=Array.prototype.slice.call(document.querySelectorAll("img[data-original]"));function i(){for(var r=0;r<c.length;r++)t=c[r],(n=t.getBoundingClientRect()).top>=-n.height&&0<=n.left&&n.top<=1.5*(e.innerHeight||document.documentElement.clientHeight)&&function(){var t,n,e,i,o=c[r];t=o,n=function(){c=c.filter(function(t){return o!==t})},e=new Image,i=t.getAttribute("data-original"),e.onload=function(){t.src=i,n&&n()},e.src=i}();var t,n}i(),e.addEventListener("scroll",function(){var t,n;t=i,n=e,clearTimeout(t.tId),t.tId=setTimeout(function(){t.call(n)},500)})}(this);</script><!-- hexo-inject:begin --><!-- Begin: Injected MathJax -->
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config("");
+</script>
+
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Queue(function() {
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i=0; i < all.length; i += 1) {
+      all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+  });
+</script>
+
+<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
+</script>
+<!-- End: Injected MathJax -->
+<!-- hexo-inject:end --></body>
+</html>

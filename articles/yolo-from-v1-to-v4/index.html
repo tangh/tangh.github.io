@@ -1,0 +1,1219 @@
+
+<!DOCTYPE html>
+
+    <html lang="zh-Hans-CN">
+
+    
+<head>
+    <!-- hexo-inject:begin --><!-- hexo-inject:end --><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="generator" content="雨天等放晴">
+    <title>实时目标检测方法 YOLO — 从 V1 到 V4 - 雨天等放晴</title>
+    <meta name="author" content="Tang Huan">
+    
+        <meta name="keywords" content="YOLO,Object Detection,目标检测,目標檢測">
+    
+    
+        <link rel="icon" href="https://tangh.github.io/assets/images/favicon.png">
+    
+    
+        <link rel="apple-touch-icon" sizes="180x180" href="https://tangh.github.io/assets/images/apple-touch-icon.png">
+    
+    
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg"},"articleBody":"\n\n\n目前真正能实时（30fps 以上）的目标检测算法效果最好的可能就是 YOLO 了，本文注重它从五年前最初版本到前两天公布的 v4 版本的进化过程，会涉及到很多其它关联算法，希望能说清楚算法流程。此文不会对各种 ablation experiment 有分析，这种实验结果类的应当去看原文，只会提及 mAP 等关键数据；对于 related work 中 YOLO 没有使用的，也不会提到，这也应该去看原文。\n论文地址：\n\nV1，CVPR2016：https://arxiv.org/abs/1506.02640\n\nV2，CVPR2017：https://arxiv.org/abs/1612.08242\n\nV3：https://arxiv.org/abs/1804.02767\n\nV4：https://arxiv.org/abs/2004.10934\n\n作者网站：https://pjreddie.com/，上面有一些 slides、oral 视频、审稿 review\n\n代码：https://github.com/AlexeyAB/darknet，官方代码是 C/CUDA 写的，除了 OpenCV 不依赖任何第三方库，包括现代的 tensor 库比如 TensorFlow、PyTorch 这些，它本身就是一个框架\n\n\n\n\n下个月应该会把一个两年前做的 R-CNN 系列的 slides 放上来（已更新至 Google Presentation），这样双极网络和单级网络的代表算法系列就齐活了。当然去年以来有一些很重要的 Anchor Free 的算法，虽然也可以划分为双极和单级，但其实挺大区别的，大致它们都是关键点检测的思想用了进来。\n下面的图来自 YOLOv4 的论文，检测的各个步骤和相应研究，我觉得分地挺好的。\nobject detection steps\n\n通常而言，单级网络去除了 Proposals 的生成过程，直接由预设好的 Anchors 加上回归值（SSD），或者网络直接预测框的中心和宽高（YOLO），来给出图像内 BBox 的位置。且单级网络没有特征重采样的过程，始终是一个密集预测，这使得一些平衡正负样本或其它作用的采样方式无法使用。\n此外，在两级网络中，对于一个位置上的一组 Anchors 或者一组 Proposals 的 类别 和 回归值，通常是由两个并行的全连接层分支给出的；而单级网络中，类别 和 Anchor 的回归值（或 BBox 的宽高）一般直接由一个预测卷积层给出，类别和回归值按照一定次序排列在输出特征的特定通道中。且通常一个点上只有一个位置预测，而不像两级网络一样，一个点上多个类别有对应的多个位置预测。\n\n\n\n\nOverview以下速度数据均在 Titan X (Maxwell) 上测试，Tesla M40 基本是相同的 GPU。新一代构架的是 Titan X (Pascal)、Titan Xp、GTX 1080 Ti、Tesla P100 这些。Titan Volta (Titan V)、Tesla V100 是更加新一代。再就到目前的 Turing，Titan RTX 这些。\n在 Pascal VOC 07 test 上，使用 07+12 训练\n\n\n\n名称\n速度（fps）\n精度（mAP）\n输入尺寸\n网络结构\n\n\n\nYOLOv1\n45\n63.4%\n448 × 448\nDarknet-24\n\n\nFast YOLOv1\n155\n52.7%\n448 × 448\nDarknet-9\n\n\nYOLOv2\n40\n78.6%\n544 × 544\nDarknet-19\n\n\nYOLOv2\n59\n77.8%\n480 × 480\nDarknet-19\n\n\nYOLOv2\n67\n76.8%\n416 × 416\nDarknet-19\n\n\nYOLOv2\n81\n73.7%\n352 × 352\nDarknet-19\n\n\nYOLOv2\n91\n69.0%\n288 × 288\nDarknet-19\n\n\n在 Pascal VOC 12 test 上，使用 07++12（即含 07 test）训练\n\n\n\n名称\n速度（fps）\n精度（mAP）\n输入尺寸\n网络结构\n\n\n\nYOLOv1\n45\n57.9%\n448 × 448\nDarknet-24\n\n\nYOLOv2\n–\n73.4%\n–\nDarknet-19\n\n\n在 MS COCO test-dev 上，使用 2017 split (trainval35k) 训练\n\n\n\n名称\n速度（fps）\n精度（mAP）\n精度（mAP 50）\n输入尺寸\n网络结构\n\n\n\nYOLOv2\n–\n21.6%\n44.0%\n–\nDarknet-19\n\n\nYOLOv3\n19.6\n33.0%\n57.9%\n608 × 608\nDarknet-53\n\n\nYOLOv3\n34.5\n31.0%\n55.3%\n416 × 416\nDarknet-53\n\n\nYOLOv3\n45.5\n28.2%\n51.5%\n320 × 320\nDarknet-53\n\n\nYOLOv4\n23\n43.5%\n65.7%\n608 × 608\nCSPDarknet-53\n\n\nYOLOv4\n31\n43.5%\n64.9%\n512 × 512\nCSPDarknet-53\n\n\nYOLOv4\n38\n43.5%\n62.8%\n416 × 416\nCSPDarknet-53\n\n\nYou Only Look Once: Unified, Real-Time Object Detection思想：缩放图片一次通过卷积神经网络同时得出位置和类别，这样速度快、中间步骤简单、基于一整张图所有信息而不是每个 Proposal 中部分信息进行检测。\nArchitectureYOLO prediction model\n\nYOLO 的检测方法是将输入图划分成 S×S 个格子（Grid），每一个格子预测出 B 个框。如果一个物体的中心落在某一个格子内部，那么这个格子负责预测这个物体。一个格子首先要预测它负责预测的物体的类别概率，这是一个长度为 Class (C) 的数组。此外，对于一个格子内的每个框，都还要预测另外的 5 个值 x, y, w, h, Pr*IoU，前两个值 x, y ∈ [0, 1] 表示框的中心点相对于这个格子的偏移，w, h 表示这个框在原图尺寸上的宽长（相对值，归一化到 [0, 1]）。这样得到预测值之后，先应用偏移 x, y 找到框的中心点，再通过 w, h 即可作出一个框。最后一个值 confidence = Pr(Object)*IoU 表示框内有物体的概率乘以这个框和 GT 之间的 IoU，也就是说，如果这个框对应的是背景，那么这个值应该是 0，如果这个框对应的是前景，那么这个值应该是与对应前景 GT 的 IoU。\n从上面我们可以看出：\n\nYOLO 所需要的整个输出为一个 S × S × (B*5 + C) 的 tensor，且这里 C 是前景的类别数，无需加上背景一类（例如对于 Pascal VOC，C=20）。它无需两级检测网络的两个全连接分开输出类别和位置，也无需 Proposals 生成、特征重采样等过程。实验中，S=7，B=2。\n\n每个格子预测的长度为 Class 的概率是一个条件概率，是在有物体下的概率，即 Pr(Class_i|Object)，所以在预测的时候，把这个和每个框内预测的概率相乘 Pr(Class_i|Object) * Pr(Object) * IoU = Pr(Class_i) * IoU 就得到对每个框的逐类别概率。这里与 R-CNN 等两级网络不同之处在于，两级网络中一般使用 C+1 类判断前背景，而 YOLO 使用框内一个额外概率值判断前背景。\n\n得到的条件概率的意思是，以上图 class probability map 为例，每个格子取输出 tensor 对应的向量中的 class 分数的最大值对应的类别，就可以得到此图。最下方的红色是 C=20 类中的一个类别，假设代表「飞机」。但是它并不表示这个格子就是「飞机」，而是，如果这个格子内有物体，那么这个格子内的物体的类别是「飞机」。而有没有物体，需要看上方图的 confidence，经提醒，这个图内的 98 个框（位置和大小反映 x, y, w, h）的粗细可能就代表这个 confidence 分数，只有 confidence 大的框，才认为里面有物体。\n\n\n下面看得到这个输出 tensor 的网络结构，YOLO 系列用了一个自创的网络结构，叫做 darknet，灵感源于 GoogLeNet (Inception V1)。在 YOLOv1 中，它有 24 层卷积层（加上 4 个池化层和 2 个全连接层），结构图如下。\nDarknet-24 (Unofficial name) Architecture\n\n这里没有使用 Inception Module，但是使用了同样的减少计算量的方法，即先用 1 × 1 reduction layer，再使用 3 × 3 convolutional layer。可以简单计算一下，在 1024 × 14 × 14 层，如果直接使用 1024 × 1024 × 3 × 3 卷积，计算量为 (1024 × 14 × 14) × (1024 × 3 × 3) = 1849.7M。而如果像图上结构一样先降维（可以理解为非线性映射到低维空间，可能联想到 PCA 虽然它是线性的）再卷积，计算量为 (512 × 14 × 14) × (1024 × 1 × 1) + (1024 × 14 × 14) × (512 × 3 × 3) = 102.7M + 924.8M = 1027.5M，接近于小到一半。这种 bottleneck 结构在现代 backbone 上很常见。\n对于激活层，最后一层使用的是线性激活函数，其它层使用的是 leaky ReLU，f(x) = 0.1x when x&lt;0。\nTraining and Inference首先在 ImageNet 上预训练前 20 层卷积，把后面替换为一个平均池化层和一个全连接层，输入尺寸为 224 × 224。训练好后改为 4 个卷积层和 2 个全连接层，输入尺寸改为 448 × 448。\nLoss 函数选择为 sum-squared error，\\(SSE = \\sum_i (x_i - \\hat{x})^2\\)。这有几个不平衡的问题：\n\n位置预测和类别预测是相等权重的；\n\n对于不含任何物体的格子，即负样本总是多于正样本的，所以 confidence 分数（每个 BBox 的第五个预测参数）会趋向于 0；\n\n大物体和小物体位置预测错误的权重是相等的，对于大物体，相同数量的位置偏移在 Loss 上的反映应当小于小物体的，因为对于 IoU 的影响会更小。\n\n\n对于前两个问题，通过增加权重 \\(\\lambda_\\text{coord} = 5 ,\\ \\lambda_\\text{noobj} = .5\\) 来解决。第三个问题，通过预测 BBox 宽高的平方根来解决。\n还有一个关于 GT 的问题是，一个格子负责预测中心点落在其内的物体，但一个格子预测了 B 个 BBox，我们只希望一个 BBox Predictor 负责一个物体。所以在训练时，只有预测出的框的与 GT 的 IoU 最大的那个 BBox 认为是有物体的（正样本）。所以这里与 R-CNN 系列两级网络不同，在那里一个 GT 是可以匹配到多个预测框的。作者这么设计意图是让每个 Predictor 专门化，专注于一种尺寸、长宽比或类别的物体。\n整个损失函数如下：\n$$\\begin{aligned}&amp; \\lambda_\\text{coord} \\sum_{i=0}^{S^2} \\sum_{j=0}^B \\mathbb{I}_{ij}^{\\text{obj}} \\cdot\\left([(x_i - \\hat{x}_i)^2 + (y_i - \\hat{y}_i)^2] +[(\\sqrt{w_i} - \\sqrt{\\hat{w}_i})^2 + (\\sqrt{h_i} - \\sqrt{\\hat{h}_i})^2]\\right) \\\\&amp; + \\sum_{i=0}^{S^2} \\sum_{j=0}^B \\mathbb{I}_{ij}^{\\text{obj}} \\cdot (C_i - \\hat{C}_i)^2 +\\lambda_{\\text{noobj}} \\sum_{i=0}^{S^2} \\sum_{j=0}^B \\mathbb{I}_{ij}^{\\text{noobj}} \\cdot (C_i - \\hat{C}_i)^2 \\\\&amp; + \\sum_{i=0}^{S^2} \\mathbb{I}_{i}^{\\text{obj}} \\sum_{c \\in \\text{classes}}\\left( p_i(c) - \\hat{p}_i(c) \\right)^2\\end{aligned}$$\n公式中第一行是 BBox 的位置和大小；第二行是 BBox 内的 Pr*IoU；第三行是每个格子内的类别概率，可以看到只有格子内有物体时才有这项 loss，这与之前的条件概率是对应的。\\(\\mathbb{I}^{\\text{condition}}\\) 表示如果 condition，那么这个值为 1，否则为 0。\n训练细节：\n\nepochs = 135，batch size = 64，momentum = 0.9，weight decay = 0.0005。\n\nlr：第一个 epoch 从 10e-3 增加到 10e-2，继续保持 75 个 epochs，然后 10e-3 训练 30 个 epochs，最终 10e-4 训练 30 个 epochs。\n\n第一个全连接层后加了一个 .5 的 Dropout 层防止过拟合。数据增强：20% 尺度的随机 translation 和 scaling，在 HSV 空间中 1.5x 的曝光和饱和度调整。\n\n\n对于测试，YOLO 设计为预测 98 个框，使用每个框内的第五个预测值决定是否留下这个框，类别使用格子预测的类别。对于一些大的物体，可能在多个格子内都给出接近的框，使用 NMS 可以增加 2% ～ 3% mAP。而对于 R-CNN 等基于区域分类的算法，NMS 是必不可少的。\nSummary and ResultsYOLO 的几个问题：\n\n对小物体效果不好；\n\nYOLO 通过下采样后数据得出 BBox 的位置偏移和宽高，所以精度不高，同时对于一些罕见的长宽比或者尺寸的物体的效果不好；\n\nloss 只是近似反映检测效果的好坏，比如对于不同大小的物体，x, y, w, h 的误差仍不能准确反映 IoU 的误差。YOLO 对于位置的预测较差，是降低 mAP 的主要原因。\n\n\n数据集使用 Pascal VOC 07+12。如果在 12 测试，那么 07 的 test 也被用于训练。在 07 的测试结果为 63.4% mAP，在 12 的测试结果为 57.9% mAP。\nYOLO9000: Better, Faster, Stronger改进：除了一些提高精度的，YOLOv2 还引入了 multi-scale training，所以它可在不同输入尺寸上工作，提供速度精度的 tradeoff。此外，提出了一种联合训练，可以同时在 COCO 和 ImageNet 上训练，网络可以学习检测那些没有在检测数据集中标注的类别。\nArchitecture首先看网络，作者将网络减少了几层，提高了速度，同时加入了 BN 层，提高了精度。\nDarknet-19 for classification\nDarknet-19 for detection\n\n\n整个网络（左图）含有 19 个卷积层和 5 个最大值池化层，不再有全连接层，网络的 output stride 减小了一倍变为 32。倒数第二层是 Global Average Pooling，出自 Network in Network，GoogLeNet 中也使用了，方法是在每个特征图通道上进行平均池化。在每个卷积层之后都加了 BN 层，网络不再需要 Dropout 层。\n对于检测（右图），网络输入尺寸也进行了改动，希望最终输出一个奇数尺寸，这样就会有一个中心点。所以 v2 中默认输入尺寸是 416 × 416，增减输入尺寸是以 64 为单位进行。一般一个大物体的中心会落在图像中心，所以这样可以用一个格子去预测它而不是四个格子。\n左图这个网络是用于 ImageNet Classification 的，在预训练完后需要改成检测网络。方法是去掉最后 Convolutional、AvgPool、Softmax 三层，然后加上三层 1024 × 3 × 3 卷积，最后用一个 1 × 1 卷积进行预测，得到所需 A × (5 + C) = 125 通道（这里通道数与 YOLOv1 不同，见下文）。此外，这里还加入一个 passthrough layer，使得网络对于小物体的检测效果更好。注意这里论文里说的和实际上代码里做的有些不同：论文中是把最后一个 512 × 3 × 3 卷积的结果，尺寸为 26 × 26 × 512 feature map 转化为 13 × 13 × 2048，然后 concat（通道上的连接）到倒数第二个卷积（也就是最后一个 3 × 3 卷积）的结果上；实际代码中对尺寸为 26 × 26 × 512 feature map 后面加了一个 64 × 1 × 1 的卷积，降低了通道数，然后再 reorg 转化为 13 × 13 × 256，并 concat 到 13 × 13 × 1024 的特征图上，输出一个 13 × 13 × 1280 的特征图。\n再看其它的改进：\nAnchor Box\nYOLO 在 BBox 位置预测上表现并不好，一方面是因为它直接给出宽高。相比 R-CNN 中有预设的 Anchors，网络只需要预测一个 offset，这相对容易。作者在 v2 中引入了 Anchors。\n第二个改动是，之前每个格子只预测一次类别，这实际上是对 BBox 的一种限制，现在需要 decouple。所以对每个 Anchor 都预测一组类别，它们的意义没变。同时，每个格子上的 BBox/Anchor 数量不再是 2。\noutput tensor of YOLOv1 against YOLOv2\n\n此外，R-CNN 系列的 Anchors 是人工指定的，而这里的 Anchors 是通过 k-means 算法得到的，距离指标为 d(box, centroid) = 1 − IoU(box, centroid)，即以 IoU 来判断。下图是在 COCO 和 VOC 上聚类出的 Anchor 形状，以及使用不同距离指标或人工指定得到的平均 IoU。\nk-means result\n\nDirect location prediction\n这里先回顾一下 R-CNN 系列中的 regressor 是怎么工作的（注意在 YOLO 的论文中符号错了）：\n$$\\begin{aligned}x = (t_x * w_a) + x_a \\ &amp; ,\\ y = (t_y * h_a) + y_a \\\\w = w_a \\cdot e^{t_w} \\ &amp; ,\\ h = h_a \\cdot e^{t_h}\\end{aligned}$$\n其中带下标 a 的是 Anchor，t 表示网络预测的值。\n对于位置这样引入了尺度不变性，比如 tx = 1 框的中心点就向右移动一个框宽度的距离。但是这对于框的位置没有限定，对于随机化的初始值，框可能出现在图中的任何位置，导致难以训练。所以位置还是沿用 v1 中的相对于格子的预测方式，宽高则采用相同的指数形式。\n$$\\begin{aligned}b_x = \\sigma(t_x) + c_x \\ &amp; ,\\ b_y = \\sigma(t_y) + c_y \\\\b_w = p_w e^{t_w} \\ &amp; ,\\ b_h = p_h e^{t_h}\\end{aligned}$$\nYOLOv2 anchor regression\n\n公式里 sigma(·) 是一个 logistic activation (sigmoid) 用于将值限定在 [0, 1]，即把中心点的变动限制在当前格子里。cx, cy 是所在格点左上角到图像左上角的距离，例如上图中是 (1, 1)（网格大小归一化了）。这里可以看出，这个位置是直接预测出的，它不依赖于设定的 Anchors。\nTrain YOLOv2\n\n\n网络\ntop-5\ntop-1\n输入尺寸\nfloating point operations\n\n\n\nVGG-16\n90.0%\n-\n224 × 224\n30.69 billion\n\n\nDarknet-24\n88.0%\n-\n224 × 224\n8.52 billion\n\n\nDarknet-19\n91.2%\n72.9%\n224 × 224\n5.58 billion\n\n\n\n在 ImageNet 上训练 160 个 epochs。lr = 0.1，polynomial rate decay with a power of 4，weight decay = 0.0005，momentum = 0.9。随机裁剪、旋转、颜色和曝光调整。\n\nHigh Resolution Classifier：ImageNet 训练是使用 224 × 224，这样在进行检测训练时，网络不仅要学习更大的 448 × 448 输入，还要同时学习检测任务。所以在 v2 中，会在 ImageNet 上使用 448 × 448 fine tune 10 个 epochs 再进行检测训练，lr = 10e-3。准确率达到 76.5%/93.3%。\n\nMulti-Scale Training：接下来进行检测训练。训练中每过 10 个 epochs，会在 {320, 352, ..., 608} 中随机选择一个输入尺寸继续训练。共 160 个 epochs，lr = 10e-3，在 10、60、90 epoch 时减半。weight decay、momentum 与上面相同。\n\n\nSummaryThe path from YOLO to YOLOv2\n\n上表总结了从 v1 到 v2 的各项改进，说明一下：表中的 anchor boxes 指的是人工指定的，固定尺寸和长宽比的 anchors，使用这种框，mAP 69.5 -&gt; 69.2，recall 81% -&gt; 88%，精度小幅下降召回明显提高，说明网络有较大提升空间，所以作者采取了下面的 k-means 聚类找出最佳初始尺寸的方法。对于这种聚类得到的框，作者叫它 dimension priors，可能应该翻译成「先验框」。但是我觉得它本质和 anchors 没什么差别，且对于网络的修改也沿用了，其实在 v3 中作者也管它叫 anchors 了，所以在上文没有区分。\nJoint train on object detection and classification (YOLO9000)基本思路是对于检测的数据传入，BP 整个网络，对于分类的数据传入，只 BP 有关分类的网络部分。一个问题是检测数据集如 COCO 提供的是一个很泛的类别，比如「狗」，共 80 类；而分类数据集如 ImageNet 提供的类别是很具体的，如「哈士奇」，共 21841 类。而 Softmax 意味着各类别之间是相互排斥的，而我们希望只在每个数据集内类别相互排斥，而数据集之间不是。\n下面仍然先要在分类上预训练，然后再训练检测。\nClassification\nImageNet 的标签来自于 WordNet，一个语言数据集，它有详细的层级，比如 canine -&gt; dog -&gt; hunting dog -&gt; terrier -&gt; Norfolk terrier，但是它是一个 Graph 而不是 Tree，比如 dog 可以属于 canine 也可以属于 domestic animal，即有多个父节点。好在大多数类别通向 root 只有一条路径，对于有多条路径的，选择最短的路径，舍弃其它的，这样就可以构造一个 Word Tree。\n对于 ImageNet-1000，构建完整个图之后有 1369 个节点，增加了额外的 369 个节点。每一个节点预测一个条件概率，最终的概率需要将它们相乘，例如 Pr(Norfolk terrier) = Pr(Norfolk terrier|terrier) * Pr(terrier|hunting dog) ∗ ... ∗ Pr(mammal|animal) * Pr(animal|physical object) * Pr(physical object)。对于分类，每张图都有物体，所以这里最后一项 Pr(physical object) = 1。\nPrediction on ImageNet vs WordTree\n\n在 ImageNet 上使用这个图训练网络，预测的形式如上图右侧，在每层级下分别 Softmax。一张图片会顺着这个 tree（可参考下面的图）走到 root，获得路径上的所有标签，即一张图现在有多个标注。这样训练的结果为 71.9%/90.4%。新增节点后准确率下降不多，同时如果网络见到了一个没训练过的狗的品种，那么预测中「狗」的概率会很大，同时所有具体类别的概率又很小。\nDetection\n对于框的分类结果，检测中每个格子内不一定有物体， Pr(physical object) 根据 confidence/objectness 分数（BBox 的第五个预测值）确定。判断一个框的类别时，从 WordTree 根节点开始向下遍历，对每一个节点，在它的所有子节点中，选择概率最大的那个（一个节点下面的所有子节点是互斥的），一直向下遍历直到某个节点的子节点概率低于设定的阈值（意味着很难确定它的下一层对象到底是哪个），或达到叶子节点，那么该节点就是对应的对象。\nCombining datasets using WordTree hierarchy\n\n训练总共选取了 9000 类，含有 COCO、ImageNet 分类和检测数据集。为了构造 Tree 产生的父节点，构造的方法与之前相同，加起来共 9418 类。Oversampling COCO 使得数据量之比为 4:1。\n网络结构和 v2 相同，先验框的尺寸改为 3 种。标注和反向传播与之前类似，（1）对于检测数据集图像，loss 与之前相同，只是这里对于 class，只反向传播标注的那个节点及其父节点上的 loss，不 BP 其子节点上的；（2）对于分类数据集图像，首先找到 GT 所属类别的预测值最高的那个框，只反向传播这个框上的 class 和 objectness 部分，四个坐标不反向传播。对于 class，与检测的相同，只看其和其父节点的，对于 objectness，原文是「We also assume that the predicted box overlaps what would be the ground truth label by at least .3 IOU and we backpropagate objectness loss based on this assumption.」，我觉得意思是说如果预测的 objectness = Pr(object) * IoU 小于 1 * 0.3 的话就有一个损失在上面，具体损失形式需要以后看一下代码了更新。\nResults\n作者在 ImageNet Detection 上测试，其中 44 类是与 COCO 相同的，156 类是 COCO 中没有只出现在 ImageNet Classification 的。结果是 19.7 mAP，在不重合的 156 类上有 16.0 mAP。具体来看不重合的类别部分，对于各种动物，COCO 中有一些动物的标注，对于新动物的类别的表现不错：red panda = 50.7, fox = 52.1, koala bear = 54.3, tiger = 61.0, armadillo = 61.7；对于一些 COCO 中完全没有相关（类似）的类别的，表现很差：diaper = 0.0, horizontal bar = 0.0, rubber eraser = 0.0, sunglasses = 0.0, swimming trunks = 0.0。\nYOLOv3: An Incremental ImprovementYOLOv3 和 v4 都是 tech report，更多是把别人的工作在保证速度前提下整合进 YOLO 以提高精度。\n每一代 YOLO 都对网络或是说 backbone 进行了改进，YOLOv3 更是主要集中在这个网络上。\nNetworkYOLOv3 同样是先有一个检测网络，在 ImageNet 上预训练，然后改为检测网络训练。下图（右侧是左侧红线部分）是 DarkNet-53，含有 52 个卷积和 1 个全连接。可以看到，与 DarkNet-19 相比，层数多了不少，主要的改变在于：\n\n去掉了池化层，全部由一个步长为 2 的卷积层完成下采样。\n\n最后的全连接层又回来了。\n\n内部出现了类似于 ResNet 的残差连接。\n\n\nDarknet-53 for classification\n\n\n\n\nbackbone\ntop-1\ntop-5\n测试尺寸\nOps\nFPS\nBFLOP/s\n\n\n\nDarknet-19\n74.1%\n91.8%\n256 × 256\n7.29 B\n171\n1246\n\n\nDarknet-53\n77.2%\n93.8%\n256 × 256\n18.7 B\n78\n1457\n\n\nResNet-101\n77.1%\n93.7%\n256 × 256\n19.7 B\n53\n1039\n\n\nResNet-152\n77.6%\n93.8%\n256 × 256\n29.4 B\n37\n1090\n\n\n上述数据统一在 TitanX 下测试，最后一项 BFLOP/s 意味着 Darknet 对 GPU 的利用更好。\n再看检测网络，在这里作者引入了类似于 FPN 的多级预测结构。这个在论文里讲得有点零散混乱且没有结构图，我根据代码做了一个下面的网络结构图。\nDarknet-53 for detection\n\n解释几点：\n\n每一个 Conv 都跟着一个 BN 和 leaky ReLU 激活层，最后每个 Prediction 是通过一个无 BN、linear 激活的 1 × 1 卷积层得到的，就是一般的预测层，在图中没有画出（也可认为绿色的 Prediction 就是这个卷积）。\n\n每一个 Add 之后有一个 linear activation。\n\n这里每个 Residual Unit 里面只有两层，与 ResNet 的不一样。上方蓝色的 N× 表示括号内的模块重复 N 次。\n\nConv 上方的尺寸是指经过这一层后的尺寸，以输入 416 × 416 为例。都是 CHW 的格式。\n\n黄色的层是改为检测网络之后新加入的，白色的是原有的 Darknet-53 Backbone，共 52 层（去掉了最后的全连接）。\n\n\n再看最后输出的 255 个通道是怎么回事，255 = 3 × (80 + 5)，首先这里是以 COCO 为基准了，不再使用 VOC 的，所以是 80；5 就是从 v1 一直延续来的；3 指的是三个 Anchors，在 v2 里是五个，而 v3 实际用了 9 个，平均分在三级预测上。在 COCO 上尺寸分别是 (10×13),(16×30),(33×23),(30×61),(62×45),(59× 119), (116 × 90), (156 × 198), (373 × 326)。\nOther ImprovementsBounding Box Prediction (objectness)\n对于 objectness 分数，YOLOv3 采用了 logistic regression，所以如果一个 BBox 与 GT 的交叠大于任何其它的 BBox，那么它的 objectness 分数应该为 1。训练使用 binary cross-entropy loss，不再是 SSE loss。\n同时引入了类似 RPN 的匹配机制：如果一个框与 GT 的交叠大于一个阈值 0.5 但它又不是交叠最大的框，那么这个将作为非正非负的样本，在训练时被忽略。\n同样，一个 GT 只会与一个 Anchor/BBox 匹配上，对于没有匹配上的负样本，loss 中将没有 coordinate 和 class predictions 部分，只有 objectness loss。\nClass Prediction (classes)\n作者去掉了之前使用的 Softmax 进行类别分类，因为发现对准确率没有帮助，且一个大型数据集如 Open Images 上面有一些交叠的类别，比如 Woman - Person。使用 independent logistic classifiers 预测，并设定一个阈值，高于这个阈值的类别将被赋给对应的框。训练使用 binary cross-entropy loss，不再是 SSE loss。\nResultsYOLO v3 results on COCO test-dev\n\n从上表可以看出，YOLOv3-608 在 COCO 上的结果以及到了和 ResNet-FasterRCNN 接近的水平，但是时间仅需 51ms，是后者的三倍多。同时，在 AP50 指标上 YOLO 表现得很好，说明很大一部分的问题来自于框的位置的不准确。\nprecision-speed compare on COCO test-dev\n\n\n\nYOLOv4: Optimal Speed and Accuracy of Object DetectionYOLOv4 是一篇将其它人提出许多的方法整合进 YOLO 的文章，但有一个前提就是保证速度，所以有些方法做了一些改动。同时基于这个原则，作者希望能使用较亲民的设备进行训练和预测，所以所有涉及多 GPU 的方法比如 SyncBN 均不予考虑。相应的测试也选用单个 RTX 2080Ti/RTX 2070/GTX 1080Ti 这类游戏显卡（但是 2080Ti 这好像不是所有打游戏的都买得起的？）。不过这篇文章还挺好的，对检测的研究也进行了一个相应的划分总结，还是挺全面的像综述一样，值得看看原文，本文里只有 YOLOv4 用到了的方法的分析。\n其实我感觉很难写，因为涉及太多其它的文章，不知道简单几句能不能给一篇文章讲清楚。此外有些还是今年的，很新，我也没看过。。。\n总的来说，作者将其它人的工作划分为 Bag of freebies (BoF) 和 Bag of specials (BoS)。前者指在训练时候的一些方法，不影响预测时间和模型复杂度；而后者指的是整个构架的改动，对预测（时间）会有影响。我花了点时间给整理了一下，下面两个表是用到的所有方法和对应论文，没有对应论文的就是作者在 YOLOv4 中应用的一些简单 BoF，可以看到，这篇文章各种 tricks 真的巨多，我相信给其它算法这么一顿军训效果也能好不少的。不过别人已经测试好了，直接能用，也很实用对吧。\n\n\n\n\n\nBackbone BoF\narXiv\nDetector BoF\narXiv\n\n\n\nCutMix\nICCV 2019 1905.04899\nCIoU-loss\nAAAI 2020 1911.08287\n\n\nDropBlock regularization\nNIPS 2018 1810.12890\nDropBlock regularization\n1810.12890\n\n\nClass label smoothing\nCVPR 2016 1512.00567\nCross mini-Batch Normalization (CmBN)\n2002.05712\n\n\n\n\nCosine annealing scheduler\n1608.03983\n\n\nOthers:\n\nBoF: Mosaic data augmentation.\n\nDetector BoF: Eliminate grid sensitivity, Optimal hyper-parameters, Random training shapes, Self-Adversarial Training, Multiple anchors for a single ground truth.\n\n\n\n\n\n\n\nBackbone BoS\narXiv\nDetector BoS\narXiv\n\n\n\nMish activation\n1908.08681\nMish activation\n1908.08681\n\n\nCross-stage partial connections (CSP)\n1911.11929\nSPP-block\nTPAMI 2015 1406.4729\n\n\nMulti-input weighted residual connections (MiWRC)\nCVPR 2020 1911.09070\nPath-aggregation block (PAN)\nCVPR 2018 1803.01534\n\n\n\n\nSAM-block\nECCV 2018 1807.06521\n\n\n\n\nDIoU-NMS\nAAAI 2020 1911.08287\n\n\n仍需要一点时间施工，不过我猜要拖到五月底了。已经到五月底了，然而事情很多，考虑到眼下两个月之内应该不会有机会看论文，所以我愉快地宣布下面的内容鸽子了 🐦。\n\n\nBag of freebies最常用的 bag of freebies 就是数据增强（data augmentation）了，YOLOv4 用了下面这些。\nCutMix\nCutMix 是一种 regional dropout strategy，这类方法通过去除一些 informative pixels 来使得网络学习图像中 less discriminative 部分的信息。\n关于训练时的标签和损失函数，YOLOv4 中使用了下面这些。\nClass label smoothing\n使得 class 标签不绝对，提升分类器效果。\nCIoU Loss\n直接以 IoU 作为 regression 的损失函数，提高了回归精度。从 IoU -&gt; GIoU -&gt; DIoU -&gt; CIoU 的变化过程，见 另一篇关于 regressor 的文中 IoU Loss 的部分。\nBag of specialsMulti-input weighted residual connections (MiWRC)、Path-aggregation block (PAN)\n前者为带权重的特征融合方式，后者为 neck 上的新的特征融合路径。见 另一篇关于 EfficientDet 文中 BiFPN 的部分。\nDIoU-NMS\n在 NMS 时考虑两个 box 中心点之间的距离以稍微降低其 IoU 值的方法，见 另一篇关于 regressor 的文中 DIoU 的部分。\n","dateCreated":"2020-04-25T00:00:00+08:00","dateModified":"2021-05-24T01:28:51+08:00","datePublished":"2020-04-25T00:00:00+08:00","description":"实时目标检测方法 YOLO 从 v1 到 v4 的进化过程，及其相关算法的步骤分析。","headline":"实时目标检测方法 YOLO — 从 V1 到 V4","image":["https://tangh.github.io/images/thumbnails/darknet-yolo.png"],"mainEntityOfPage":{"@type":"WebPage","@id":"https://tangh.github.io/articles/yolo-from-v1-to-v4/"},"publisher":{"@type":"Organization","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg","logo":{"@type":"ImageObject","url":"icon.jpg"}},"url":"https://tangh.github.io/articles/yolo-from-v1-to-v4/","keywords":"Computer Vision, Deep Learning, Object Detection","thumbnailUrl":"https://tangh.github.io/images/thumbnails/darknet-yolo.png"}</script>
+    <meta name="description" content="实时目标检测方法 YOLO 从 v1 到 v4 的进化过程，及其相关算法的步骤分析。">
+<meta property="og:type" content="blog">
+<meta property="og:title" content="实时目标检测方法 YOLO — 从 V1 到 V4">
+<meta property="og:url" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;articles&#x2F;yolo-from-v1-to-v4&#x2F;">
+<meta property="og:site_name" content="雨天等放晴">
+<meta property="og:description" content="实时目标检测方法 YOLO 从 v1 到 v4 的进化过程，及其相关算法的步骤分析。">
+<meta property="og:locale" content="en_US">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;yolo-detection-steps.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;yolo-prediction-model.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;yolo-darknet-24.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;yolo-darknet-19-classification.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;yolo-darknet-19-detection.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;yolo-output-tensor.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;yolo-anchor-clusters.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;yolo-v2-anchor-regression.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;yolo-v2-improvement-path.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;yolo-prediction-on-wordtree1k.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;yolo-combine-coco-and-imagenet.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;yolo-darknet-53-classification.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;yolo-darknet-53-detection.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;yolo-v3-results-on-coco-test-dev.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;yolo-v3-precision-speed-compare.png">
+<meta property="article:published_time" content="2020-04-24T16:00:00.000Z">
+<meta property="article:modified_time" content="2021-05-23T17:28:51.054Z">
+<meta property="article:author" content="Tang Huan">
+<meta property="article:tag" content="YOLO">
+<meta property="article:tag" content="Object Detection">
+<meta property="article:tag" content="目标检测">
+<meta property="article:tag" content="目標檢測">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;yolo-detection-steps.png">
+    
+    
+        
+    
+    
+        <meta property="og:image" content="https://tangh.github.io/assets/images/icon.jpg"/>
+    
+    
+        <meta property="og:image" content="https://tangh.github.io/images/thumbnails/darknet-yolo.png"/>
+        <meta class="swiftype" name="image" data-type="enum" content="https://tangh.github.io/images/thumbnails/darknet-yolo.png"/>
+    
+    
+    
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
+    <!--STYLES-->
+    
+<link rel="stylesheet" href="/assets/css/style-iaetwm81hfopcuajcp7qnh2zsnqn4dhiu3nftuj79wdhe7fie6l4r0thrs6g.min.css">
+
+    <!--STYLES END-->
+    
+    <script async src="https://www.googletagmanager.com/gtag/js?id=UA-137837052-1"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'UA-137837052-1');
+    </script><!-- hexo-inject:begin --><!-- hexo-inject:end -->
+
+
+    
+
+</head>
+
+    <body>
+        <!-- hexo-inject:begin --><!-- hexo-inject:end --><div id="blog">
+            <!-- Define author's picture -->
+
+
+    
+        
+            
+        
+    
+
+<header id="header" data-behavior="4">
+    <i id="btn-open-sidebar" class="fa fa-lg fa-bars"></i>
+    <div class="header-title">
+        <a
+            class="header-title-link"
+            href="/"
+            aria-label=""
+        >
+            雨天等放晴
+        </a>
+    </div>
+    
+        
+            <a
+                class="header-right-picture "
+                href="#about"
+                aria-label="Open the link: /#about"
+            >
+        
+        
+            <img class="header-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+        </a>
+    
+</header>
+
+            <!-- Define author's picture -->
+
+
+
+        
+    
+
+<nav id="sidebar" data-behavior="4">
+    <div class="sidebar-container">
+        
+            <div class="sidebar-profile">
+                <a
+                    href="/#about"
+                    aria-label="Read more about the author"
+                >
+                    <img class="sidebar-profile-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+                </a>
+                <h4 class="sidebar-profile-name">Tang Huan</h4>
+                
+                    <h5 class="sidebar-profile-bio"></h5>
+                
+            </div>
+        
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/"
+                            
+                            rel="noopener"
+                            title="Home"
+                        >
+                        <i class="sidebar-button-icon fa fa-home" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Home</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-categories"
+                            
+                            rel="noopener"
+                            title="Categories"
+                        >
+                        <i class="sidebar-button-icon fa fa-bookmark" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Categories</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-tags"
+                            
+                            rel="noopener"
+                            title="Tags"
+                        >
+                        <i class="sidebar-button-icon fa fa-tags" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Tags</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-archives"
+                            
+                            rel="noopener"
+                            title="Archives"
+                        >
+                        <i class="sidebar-button-icon fa fa-archive" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Archives</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/about"
+                            
+                            rel="noopener"
+                            title="About"
+                        >
+                        <i class="sidebar-button-icon fas fa-cube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">About</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://twitter.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Twitter"
+                        >
+                        <i class="sidebar-button-icon fab fa-twitter" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Twitter</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.flickr.com/photos/135277712@N07/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Flickr"
+                        >
+                        <i class="sidebar-button-icon fab fa-flickr" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Flickr</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.instagram.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Instagram"
+                        >
+                        <i class="sidebar-button-icon fab fa-instagram" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Instagram</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="YouTube"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">YouTube</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://space.bilibili.com/634428/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="BiliBili"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube-square" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">BiliBili</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+    </div>
+</nav>
+
+            
+            <div id="main" data-behavior="4"
+                 class="
+                        hasCoverMetaIn
+                        ">
+                
+<article class="post">
+    
+    
+        <div class="post-header main-content-wrap text-center">
+    
+        <h1 class="post-title">
+            实时目标检测方法 YOLO — 从 V1 到 V4
+        </h1>
+    
+    
+        <div class="post-meta">
+    <time datetime="2020-04-25T00:00:00+08:00">
+	
+		    Apr 25, 2020
+    	
+    </time>
+    
+        <span>in </span>
+        
+    <a class="category-link" href="/categories/Computer-Science/">Computer Science</a>, <a class="category-link" href="/categories/Computer-Science/Deep-Learning/">Deep Learning</a>
+
+
+    
+</div>
+
+    
+</div>
+
+    
+    
+        <div class="post-content markdown">
+    
+        <div class="main-content-wrap">
+            <!-- excerpt -->
+
+
+<p>目前真正能实时（30fps 以上）的目标检测算法效果最好的可能就是 YOLO 了，本文注重它从五年前最初版本到前两天公布的 v4 版本的进化过程，会涉及到很多其它关联算法，希望能说清楚算法流程。此文不会对各种 ablation experiment 有分析，这种实验结果类的应当去看原文，只会提及 mAP 等关键数据；对于 related work 中 YOLO 没有使用的，也不会提到，这也应该去看原文。</p>
+<div class="alert info no-icon"><p><strong>论文地址：</strong></p>
+<ol>
+<li><p>V1，CVPR2016：<a href="https://arxiv.org/abs/1506.02640" target="_blank" rel="noopener">https://arxiv.org/abs/1506.02640</a></p>
+</li>
+<li><p>V2，CVPR2017：<a href="https://arxiv.org/abs/1612.08242" target="_blank" rel="noopener">https://arxiv.org/abs/1612.08242</a></p>
+</li>
+<li><p>V3：<a href="https://arxiv.org/abs/1804.02767" target="_blank" rel="noopener">https://arxiv.org/abs/1804.02767</a></p>
+</li>
+<li><p>V4：<a href="https://arxiv.org/abs/2004.10934" target="_blank" rel="noopener">https://arxiv.org/abs/2004.10934</a></p>
+</li>
+<li><p>作者网站：<a href="https://pjreddie.com/" target="_blank" rel="noopener">https://pjreddie.com/</a>，上面有一些 slides、oral 视频、审稿 review</p>
+</li>
+<li><p>代码：<a href="https://github.com/AlexeyAB/darknet" target="_blank" rel="noopener">https://github.com/AlexeyAB/darknet</a>，官方代码是 C/CUDA 写的，除了 OpenCV 不依赖任何第三方库，包括现代的 tensor 库比如 TensorFlow、PyTorch 这些，它本身就是一个框架</p>
+</li>
+</ol>
+</div>
+
+<p>下个月应该会把一个两年前做的 R-CNN 系列的 slides 放上来（已更新至 <a href="https://docs.google.com/presentation/d/1N2H12L0XVV-s0FuxcyHAcG0CFNujHxuWneObr8o7CAE/edit?usp=sharing" target="_blank" rel="noopener">Google Presentation</a>），这样双极网络和单级网络的代表算法系列就齐活了。当然去年以来有一些很重要的 Anchor Free 的算法，虽然也可以划分为双极和单级，但其实挺大区别的，大致它们都是关键点检测的思想用了进来。</p>
+<p>下面的图来自 YOLOv4 的论文，检测的各个步骤和相应研究，我觉得分地挺好的。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-detection-steps.png" target="_blank" rel="noopener" title="object detection steps" data-caption="object detection steps" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-detection-steps.png" alt="object detection steps"></a><span class="caption">object detection steps</span></div><div style="clear:both;"></div>
+
+<p>通常而言，单级网络去除了 Proposals 的生成过程，直接由预设好的 Anchors 加上回归值（SSD），或者网络直接预测框的中心和宽高（YOLO），来给出图像内 BBox 的位置。且单级网络没有特征重采样的过程，始终是一个密集预测，这使得一些平衡正负样本或其它作用的采样方式无法使用。</p>
+<p>此外，在两级网络中，对于一个位置上的一组 Anchors 或者一组 Proposals 的 类别 和 回归值，通常是由两个并行的全连接层分支给出的；而单级网络中，类别 和 Anchor 的回归值（或 BBox 的宽高）一般直接由一个预测卷积层给出，类别和回归值按照一定次序排列在输出特征的特定通道中。且通常一个点上只有一个位置预测，而不像两级网络一样，一个点上多个类别有对应的多个位置预测。</p>
+<h1 id="table-of-contents">Table of Contents</h1><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#Overview"><span class="toc-text">Overview</span></a></li><li class="toc-item toc-level-1"><a class="toc-link" href="#You-Only-Look-Once-Unified-Real-Time-Object-Detection"><span class="toc-text">You Only Look Once: Unified, Real-Time Object Detection</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#Architecture"><span class="toc-text">Architecture</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Training-and-Inference"><span class="toc-text">Training and Inference</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Summary-and-Results"><span class="toc-text">Summary and Results</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#YOLO9000-Better-Faster-Stronger"><span class="toc-text">YOLO9000: Better, Faster, Stronger</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#Architecture-1"><span class="toc-text">Architecture</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Train-YOLOv2"><span class="toc-text">Train YOLOv2</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Summary"><span class="toc-text">Summary</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Joint-train-on-object-detection-and-classification-YOLO9000"><span class="toc-text">Joint train on object detection and classification (YOLO9000)</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#YOLOv3-An-Incremental-Improvement"><span class="toc-text">YOLOv3: An Incremental Improvement</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#Network"><span class="toc-text">Network</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Other-Improvements"><span class="toc-text">Other Improvements</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Results"><span class="toc-text">Results</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#YOLOv4-Optimal-Speed-and-Accuracy-of-Object-Detection"><span class="toc-text">YOLOv4: Optimal Speed and Accuracy of Object Detection</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#Bag-of-freebies"><span class="toc-text">Bag of freebies</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Bag-of-specials"><span class="toc-text">Bag of specials</span></a></li></ol></li></ol>
+
+
+
+<h1 id="Overview"><a href="#Overview" class="headerlink" title="Overview"></a>Overview</h1><p>以下速度数据均在 Titan X (Maxwell) 上测试，Tesla M40 基本是相同的 GPU。新一代构架的是 Titan X (Pascal)、Titan Xp、GTX 1080 Ti、Tesla P100 这些。Titan Volta (Titan V)、Tesla V100 是更加新一代。再就到目前的 Turing，Titan RTX 这些。</p>
+<p>在 Pascal VOC 07 test 上，使用 07+12 训练</p>
+<table>
+<thead>
+<tr>
+<th align="center">名称</th>
+<th align="center">速度（fps）</th>
+<th align="center">精度（mAP）</th>
+<th align="center">输入尺寸</th>
+<th align="center">网络结构</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="center">YOLOv1</td>
+<td align="center">45</td>
+<td align="center">63.4%</td>
+<td align="center">448 × 448</td>
+<td align="center">Darknet-24</td>
+</tr>
+<tr>
+<td align="center">Fast YOLOv1</td>
+<td align="center">155</td>
+<td align="center">52.7%</td>
+<td align="center">448 × 448</td>
+<td align="center">Darknet-9</td>
+</tr>
+<tr>
+<td align="center">YOLOv2</td>
+<td align="center">40</td>
+<td align="center">78.6%</td>
+<td align="center">544 × 544</td>
+<td align="center">Darknet-19</td>
+</tr>
+<tr>
+<td align="center">YOLOv2</td>
+<td align="center">59</td>
+<td align="center">77.8%</td>
+<td align="center">480 × 480</td>
+<td align="center">Darknet-19</td>
+</tr>
+<tr>
+<td align="center">YOLOv2</td>
+<td align="center">67</td>
+<td align="center">76.8%</td>
+<td align="center">416 × 416</td>
+<td align="center">Darknet-19</td>
+</tr>
+<tr>
+<td align="center">YOLOv2</td>
+<td align="center">81</td>
+<td align="center">73.7%</td>
+<td align="center">352 × 352</td>
+<td align="center">Darknet-19</td>
+</tr>
+<tr>
+<td align="center">YOLOv2</td>
+<td align="center">91</td>
+<td align="center">69.0%</td>
+<td align="center">288 × 288</td>
+<td align="center">Darknet-19</td>
+</tr>
+</tbody></table>
+<p>在 Pascal VOC 12 test 上，使用 07++12（即含 07 test）训练</p>
+<table>
+<thead>
+<tr>
+<th align="center">名称</th>
+<th align="center">速度（fps）</th>
+<th align="center">精度（mAP）</th>
+<th align="center">输入尺寸</th>
+<th align="center">网络结构</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="center">YOLOv1</td>
+<td align="center">45</td>
+<td align="center">57.9%</td>
+<td align="center">448 × 448</td>
+<td align="center">Darknet-24</td>
+</tr>
+<tr>
+<td align="center">YOLOv2</td>
+<td align="center">–</td>
+<td align="center">73.4%</td>
+<td align="center">–</td>
+<td align="center">Darknet-19</td>
+</tr>
+</tbody></table>
+<p>在 MS COCO test-dev 上，使用 2017 split (trainval35k) 训练</p>
+<table>
+<thead>
+<tr>
+<th align="center">名称</th>
+<th align="center">速度（fps）</th>
+<th align="center">精度（mAP）</th>
+<th align="center">精度（mAP 50）</th>
+<th align="center">输入尺寸</th>
+<th align="center">网络结构</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="center">YOLOv2</td>
+<td align="center">–</td>
+<td align="center">21.6%</td>
+<td align="center">44.0%</td>
+<td align="center">–</td>
+<td align="center">Darknet-19</td>
+</tr>
+<tr>
+<td align="center">YOLOv3</td>
+<td align="center">19.6</td>
+<td align="center">33.0%</td>
+<td align="center">57.9%</td>
+<td align="center">608 × 608</td>
+<td align="center">Darknet-53</td>
+</tr>
+<tr>
+<td align="center">YOLOv3</td>
+<td align="center">34.5</td>
+<td align="center">31.0%</td>
+<td align="center">55.3%</td>
+<td align="center">416 × 416</td>
+<td align="center">Darknet-53</td>
+</tr>
+<tr>
+<td align="center">YOLOv3</td>
+<td align="center">45.5</td>
+<td align="center">28.2%</td>
+<td align="center">51.5%</td>
+<td align="center">320 × 320</td>
+<td align="center">Darknet-53</td>
+</tr>
+<tr>
+<td align="center">YOLOv4</td>
+<td align="center">23</td>
+<td align="center">43.5%</td>
+<td align="center">65.7%</td>
+<td align="center">608 × 608</td>
+<td align="center">CSPDarknet-53</td>
+</tr>
+<tr>
+<td align="center">YOLOv4</td>
+<td align="center">31</td>
+<td align="center">43.5%</td>
+<td align="center">64.9%</td>
+<td align="center">512 × 512</td>
+<td align="center">CSPDarknet-53</td>
+</tr>
+<tr>
+<td align="center">YOLOv4</td>
+<td align="center">38</td>
+<td align="center">43.5%</td>
+<td align="center">62.8%</td>
+<td align="center">416 × 416</td>
+<td align="center">CSPDarknet-53</td>
+</tr>
+</tbody></table>
+<h1 id="You-Only-Look-Once-Unified-Real-Time-Object-Detection"><a href="#You-Only-Look-Once-Unified-Real-Time-Object-Detection" class="headerlink" title="You Only Look Once: Unified, Real-Time Object Detection"></a>You Only Look Once: Unified, Real-Time Object Detection</h1><p>思想：缩放图片一次通过卷积神经网络同时得出位置和类别，这样速度快、中间步骤简单、基于一整张图所有信息而不是每个 Proposal 中部分信息进行检测。</p>
+<h2 id="Architecture"><a href="#Architecture" class="headerlink" title="Architecture"></a>Architecture</h2><div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-prediction-model.png" target="_blank" rel="noopener" title="YOLO prediction model" data-caption="YOLO prediction model" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-prediction-model.png" alt="YOLO prediction model"></a><span class="caption">YOLO prediction model</span></div><div style="clear:both;"></div>
+
+<p>YOLO 的检测方法是将输入图划分成 S×S 个格子（Grid），每一个格子预测出 B 个框。如果一个物体的中心落在某一个格子内部，那么这个格子负责预测这个物体。一个格子首先要预测它负责预测的物体的类别概率，这是一个长度为 Class (C) 的数组。此外，对于一个格子内的每个框，都还要预测另外的 5 个值 <code>x, y, w, h, Pr*IoU</code>，前两个值 <code>x, y ∈ [0, 1]</code> 表示框的中心点相对于这个格子的偏移，<code>w, h</code> 表示这个框在原图尺寸上的宽长（相对值，归一化到 <code>[0, 1]</code>）。这样得到预测值之后，先应用偏移 <code>x, y</code> 找到框的中心点，再通过 <code>w, h</code> 即可作出一个框。最后一个值 <code>confidence = Pr(Object)*IoU</code> 表示框内有物体的概率乘以这个框和 GT 之间的 IoU，也就是说，如果这个框对应的是背景，那么这个值应该是 <code>0</code>，如果这个框对应的是前景，那么这个值应该是与对应前景 GT 的 IoU。</p>
+<p>从上面我们可以看出：</p>
+<ul>
+<li><p>YOLO 所需要的整个输出为一个 <code>S × S × (B*5 + C)</code> 的 tensor，且这里 C 是前景的类别数，无需加上背景一类（例如对于 Pascal VOC，C=20）。它无需两级检测网络的两个全连接分开输出类别和位置，也无需 Proposals 生成、特征重采样等过程。实验中，S=7，B=2。</p>
+</li>
+<li><p>每个格子预测的长度为 Class 的概率是一个条件概率，是在有物体下的概率，即 <code>Pr(Class_i|Object)</code>，所以在预测的时候，把这个和每个框内预测的概率相乘 <code>Pr(Class_i|Object) * Pr(Object) * IoU = Pr(Class_i) * IoU</code> 就得到对每个框的逐类别概率。这里与 R-CNN 等两级网络不同之处在于，两级网络中一般使用 C+1 类判断前背景，而 YOLO 使用框内一个额外概率值判断前背景。</p>
+</li>
+<li><p>得到的条件概率的意思是，以上图 class probability map 为例，每个格子取输出 tensor 对应的向量中的 class 分数的最大值对应的类别，就可以得到此图。最下方的红色是 C=20 类中的一个类别，假设代表「飞机」。但是它并不表示这个格子就是「飞机」，而是，如果这个格子内有物体，那么这个格子内的物体的类别是「飞机」。而有没有物体，需要看上方图的 confidence，经提醒，这个图内的 98 个框（位置和大小反映 <code>x, y, w, h</code>）的粗细可能就代表这个 confidence 分数，只有 confidence 大的框，才认为里面有物体。</p>
+</li>
+</ul>
+<p>下面看得到这个输出 tensor 的网络结构，YOLO 系列用了一个自创的网络结构，叫做 darknet，灵感源于 <a href="https://arxiv.org/abs/1409.4842" target="_blank" rel="noopener">GoogLeNet (Inception V1)</a>。在 YOLOv1 中，它有 24 层卷积层（加上 4 个池化层和 2 个全连接层），结构图如下。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-darknet-24.png" target="_blank" rel="noopener" title="Darknet-24 (Unofficial name) Architecture" data-caption="Darknet-24 (Unofficial name) Architecture" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-darknet-24.png" alt="Darknet-24 (Unofficial name) Architecture"></a><span class="caption">Darknet-24 (Unofficial name) Architecture</span></div><div style="clear:both;"></div>
+
+<p>这里没有使用 Inception Module，但是使用了同样的减少计算量的方法，即先用 1 × 1 reduction layer，再使用 3 × 3 convolutional layer。可以简单计算一下，在 1024 × 14 × 14 层，如果直接使用 1024 × 1024 × 3 × 3 卷积，计算量为 <code>(1024 × 14 × 14) × (1024 × 3 × 3) = 1849.7M</code>。而如果像图上结构一样先降维（可以理解为非线性映射到低维空间，可能联想到 PCA 虽然它是线性的）再卷积，计算量为 <code>(512 × 14 × 14) × (1024 × 1 × 1) + (1024 × 14 × 14) × (512 × 3 × 3) = 102.7M + 924.8M = 1027.5M</code>，接近于小到一半。这种 bottleneck 结构在现代 backbone 上很常见。</p>
+<p>对于激活层，最后一层使用的是线性激活函数，其它层使用的是 leaky ReLU，<code>f(x) = 0.1x when x&lt;0</code>。</p>
+<h2 id="Training-and-Inference"><a href="#Training-and-Inference" class="headerlink" title="Training and Inference"></a>Training and Inference</h2><p>首先在 ImageNet 上预训练前 20 层卷积，把后面替换为一个平均池化层和一个全连接层，输入尺寸为 224 × 224。训练好后改为 4 个卷积层和 2 个全连接层，输入尺寸改为 448 × 448。</p>
+<p>Loss 函数选择为 sum-squared error，\(SSE = \sum_i (x_i - \hat{x})^2\)。这有几个不平衡的问题：</p>
+<ol>
+<li><p>位置预测和类别预测是相等权重的；</p>
+</li>
+<li><p>对于不含任何物体的格子，即负样本总是多于正样本的，所以 confidence 分数（每个 BBox 的第五个预测参数）会趋向于 <code>0</code>；</p>
+</li>
+<li><p>大物体和小物体位置预测错误的权重是相等的，对于大物体，相同数量的位置偏移在 Loss 上的反映应当小于小物体的，因为对于 IoU 的影响会更小。</p>
+</li>
+</ol>
+<p>对于前两个问题，通过增加权重 \(\lambda_\text{coord} = 5 ,\ \lambda_\text{noobj} = .5\) 来解决。第三个问题，通过预测 BBox 宽高的平方根来解决。</p>
+<p>还有一个关于 GT 的问题是，一个格子负责预测中心点落在其内的物体，但一个格子预测了 B 个 BBox，我们只希望一个 BBox Predictor 负责一个物体。所以在训练时，只有预测出的框的与 GT 的 IoU 最大的那个 BBox 认为是有物体的（正样本）。所以这里与 R-CNN 系列两级网络不同，在那里一个 GT 是可以匹配到多个预测框的。作者这么设计意图是让每个 Predictor 专门化，专注于一种尺寸、长宽比或类别的物体。</p>
+<p>整个损失函数如下：</p>
+<p>$$<br>\begin{aligned}<br>&amp; \lambda_\text{coord} \sum_{i=0}^{S^2} \sum_{j=0}^B \mathbb{I}_{ij}^{\text{obj}} \cdot<br>\left(<br>[(x_i - \hat{x}_i)^2 + (y_i - \hat{y}_i)^2] +<br>[(\sqrt{w_i} - \sqrt{\hat{w}_i})^2 + (\sqrt{h_i} - \sqrt{\hat{h}_i})^2]<br>\right) \\<br>&amp; + \sum_{i=0}^{S^2} \sum_{j=0}^B \mathbb{I}_{ij}^{\text{obj}} \cdot (C_i - \hat{C}_i)^2 +<br>\lambda_{\text{noobj}} \sum_{i=0}^{S^2} \sum_{j=0}^B \mathbb{I}_{ij}^{\text{noobj}} \cdot (C_i - \hat{C}_i)^2 \\<br>&amp; + \sum_{i=0}^{S^2} \mathbb{I}_{i}^{\text{obj}} \sum_{c \in \text{classes}}<br>\left( p_i(c) - \hat{p}_i(c) \right)^2<br>\end{aligned}<br>$$</p>
+<p>公式中第一行是 BBox 的位置和大小；第二行是 BBox 内的 <code>Pr*IoU</code>；第三行是每个格子内的类别概率，可以看到只有格子内有物体时才有这项 loss，这与之前的条件概率是对应的。\(\mathbb{I}^{\text{condition}}\) 表示如果 <code>condition</code>，那么这个值为 <code>1</code>，否则为 <code>0</code>。</p>
+<p><strong>训练细节：</strong></p>
+<ol>
+<li><p>epochs = 135，batch size = 64，momentum = 0.9，weight decay = 0.0005。</p>
+</li>
+<li><p>lr：第一个 epoch 从 10e-3 增加到 10e-2，继续保持 75 个 epochs，然后 10e-3 训练 30 个 epochs，最终 10e-4 训练 30 个 epochs。</p>
+</li>
+<li><p>第一个全连接层后加了一个 <code>.5</code> 的 Dropout 层防止过拟合。数据增强：20% 尺度的随机 translation 和 scaling，在 HSV 空间中 1.5x 的曝光和饱和度调整。</p>
+</li>
+</ol>
+<p>对于测试，YOLO 设计为预测 98 个框，使用每个框内的第五个预测值决定是否留下这个框，类别使用格子预测的类别。对于一些大的物体，可能在多个格子内都给出接近的框，使用 NMS 可以增加 2% ～ 3% mAP。而对于 R-CNN 等基于区域分类的算法，NMS 是必不可少的。</p>
+<h2 id="Summary-and-Results"><a href="#Summary-and-Results" class="headerlink" title="Summary and Results"></a>Summary and Results</h2><p>YOLO 的几个问题：</p>
+<ol>
+<li><p>对小物体效果不好；</p>
+</li>
+<li><p>YOLO 通过下采样后数据得出 BBox 的位置偏移和宽高，所以精度不高，同时对于一些罕见的长宽比或者尺寸的物体的效果不好；</p>
+</li>
+<li><p>loss 只是近似反映检测效果的好坏，比如对于不同大小的物体，<code>x, y, w, h</code> 的误差仍不能准确反映 IoU 的误差。YOLO 对于位置的预测较差，是降低 mAP 的主要原因。</p>
+</li>
+</ol>
+<p>数据集使用 Pascal VOC 07+12。如果在 12 测试，那么 07 的 test 也被用于训练。在 07 的测试结果为 <code>63.4%</code> mAP，在 12 的测试结果为 <code>57.9%</code> mAP。</p>
+<h1 id="YOLO9000-Better-Faster-Stronger"><a href="#YOLO9000-Better-Faster-Stronger" class="headerlink" title="YOLO9000: Better, Faster, Stronger"></a>YOLO9000: Better, Faster, Stronger</h1><p>改进：除了一些提高精度的，YOLOv2 还引入了 multi-scale training，所以它可在不同输入尺寸上工作，提供速度精度的 tradeoff。此外，提出了一种联合训练，可以同时在 COCO 和 ImageNet 上训练，网络可以学习检测那些没有在检测数据集中标注的类别。</p>
+<h2 id="Architecture-1"><a href="#Architecture-1" class="headerlink" title="Architecture"></a>Architecture</h2><p>首先看网络，作者将网络减少了几层，提高了速度，同时加入了 <a href="https://arxiv.org/abs/1502.03167" target="_blank" rel="noopener">BN</a> 层，提高了精度。</p>
+<div class="figure fig-50" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-darknet-19-classification.png" target="_blank" rel="noopener" title="Darknet-19 for classification" data-caption="Darknet-19 for classification" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-darknet-19-classification.png" alt="Darknet-19 for classification"></a><span class="caption">Darknet-19 for classification</span></div>
+<div class="figure fig-50" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-darknet-19-detection.png" target="_blank" rel="noopener" title="Darknet-19 for detection" data-caption="Darknet-19 for detection" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-darknet-19-detection.png" alt="Darknet-19 for detection"></a><span class="caption">Darknet-19 for detection</span></div>
+<div style="clear:both;"></div>
+
+<p>整个网络（左图）含有 19 个卷积层和 5 个最大值池化层，不再有全连接层，网络的 output stride 减小了一倍变为 32。倒数第二层是 Global Average Pooling，出自 <a href="https://arxiv.org/abs/1312.4400" target="_blank" rel="noopener">Network in Network</a>，<a href="https://arxiv.org/abs/1409.4842" target="_blank" rel="noopener">GoogLeNet</a> 中也使用了，方法是在每个特征图通道上进行平均池化。在每个卷积层之后都加了 BN 层，网络不再需要 Dropout 层。</p>
+<p>对于检测（右图），网络输入尺寸也进行了改动，希望最终输出一个奇数尺寸，这样就会有一个中心点。所以 v2 中默认输入尺寸是 416 × 416，增减输入尺寸是以 64 为单位进行。一般一个大物体的中心会落在图像中心，所以这样可以用一个格子去预测它而不是四个格子。</p>
+<p>左图这个网络是用于 ImageNet Classification 的，在预训练完后需要改成检测网络。方法是去掉最后 Convolutional、AvgPool、Softmax 三层，然后加上三层 1024 × 3 × 3 卷积，最后用一个 1 × 1 卷积进行预测，得到所需 <code>A × (5 + C) = 125</code> 通道（这里通道数与 YOLOv1 不同，见下文）。此外，这里还加入一个 passthrough layer，使得网络对于小物体的检测效果更好。注意这里论文里说的和实际上<a href="https://github.com/pjreddie/darknet/blob/master/cfg/yolov2.cfg#L211-L217" target="_blank" rel="noopener">代码</a>里做的有些不同：论文中是把最后一个 512 × 3 × 3 卷积的结果，尺寸为 26 × 26 × 512 feature map 转化为 13 × 13 × 2048，然后 concat（通道上的连接）到倒数第二个卷积（也就是最后一个 3 × 3 卷积）的结果上；实际代码中对尺寸为 26 × 26 × 512 feature map 后面加了一个 64 × 1 × 1 的卷积，降低了通道数，然后再 <a href="https://github.com/pjreddie/darknet/blob/8215a8864d4ad07e058acafd75b2c6ff6600b9e8/src/blas.c#L9-L30" target="_blank" rel="noopener">reorg</a> 转化为 13 × 13 × 256，并 concat 到 13 × 13 × 1024 的特征图上，输出一个 13 × 13 × 1280 的特征图。</p>
+<p>再看其它的改进：</p>
+<p><strong>Anchor Box</strong></p>
+<p>YOLO 在 BBox 位置预测上表现并不好，一方面是因为它直接给出宽高。相比 R-CNN 中有预设的 Anchors，网络只需要预测一个 offset，这相对容易。作者在 v2 中引入了 Anchors。</p>
+<p>第二个改动是，之前每个格子只预测一次类别，这实际上是对 BBox 的一种限制，现在需要 decouple。所以对每个 Anchor 都预测一组类别，它们的意义没变。同时，每个格子上的 BBox/Anchor 数量不再是 2。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-output-tensor.png" target="_blank" rel="noopener" title="output tensor of YOLOv1 against YOLOv2" data-caption="output tensor of YOLOv1 against YOLOv2" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-output-tensor.png" alt="output tensor of YOLOv1 against YOLOv2"></a><span class="caption">output tensor of YOLOv1 against YOLOv2</span></div><div style="clear:both;"></div>
+
+<p>此外，R-CNN 系列的 Anchors 是人工指定的，而这里的 Anchors 是通过 k-means 算法得到的，距离指标为 <code>d(box, centroid) = 1 − IoU(box, centroid)</code>，即以 IoU 来判断。下图是在 COCO 和 VOC 上聚类出的 Anchor 形状，以及使用不同距离指标或人工指定得到的平均 IoU。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-anchor-clusters.png" target="_blank" rel="noopener" title="k-means result" data-caption="k-means result" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-anchor-clusters.png" alt="k-means result"></a><span class="caption">k-means result</span></div><div style="clear:both;"></div>
+
+<p><strong>Direct location prediction</strong></p>
+<p>这里先回顾一下 R-CNN 系列中的 regressor 是怎么工作的（注意在 YOLO 的论文中符号错了）：</p>
+<p>$$<br>\begin{aligned}<br>x = (t_x * w_a) + x_a \ &amp; ,\ y = (t_y * h_a) + y_a \\<br>w = w_a \cdot e^{t_w} \ &amp; ,\ h = h_a \cdot e^{t_h}<br>\end{aligned}<br>$$</p>
+<p>其中带下标 <code>a</code> 的是 Anchor，<code>t</code> 表示网络预测的值。</p>
+<p>对于位置这样引入了尺度不变性，比如 <code>tx = 1</code> 框的中心点就向右移动一个框宽度的距离。但是这对于框的位置没有限定，对于随机化的初始值，框可能出现在图中的任何位置，导致难以训练。所以位置还是沿用 v1 中的相对于格子的预测方式，宽高则采用相同的指数形式。</p>
+<p>$$<br>\begin{aligned}<br>b_x = \sigma(t_x) + c_x \ &amp; ,\ b_y = \sigma(t_y) + c_y \\<br>b_w = p_w e^{t_w} \ &amp; ,\ b_h = p_h e^{t_h}<br>\end{aligned}<br>$$</p>
+<div class="figure center" style="width:75%;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-v2-anchor-regression.png" target="_blank" rel="noopener" title="YOLOv2 anchor regression" data-caption="YOLOv2 anchor regression" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-v2-anchor-regression.png" style="width:75%;"alt="YOLOv2 anchor regression"></a><span class="caption">YOLOv2 anchor regression</span></div><div style="clear:both;"></div>
+
+<p>公式里 <code>sigma(·)</code> 是一个 logistic activation (sigmoid) 用于将值限定在 <code>[0, 1]</code>，即把中心点的变动限制在当前格子里。<code>cx, cy</code> 是所在格点左上角到图像左上角的距离，例如上图中是 <code>(1, 1)</code>（网格大小归一化了）。这里可以看出，这个位置是直接预测出的，它不依赖于设定的 Anchors。</p>
+<h2 id="Train-YOLOv2"><a href="#Train-YOLOv2" class="headerlink" title="Train YOLOv2"></a>Train YOLOv2</h2><table>
+<thead>
+<tr>
+<th align="center">网络</th>
+<th align="center">top-5</th>
+<th align="center">top-1</th>
+<th align="center">输入尺寸</th>
+<th align="center">floating point operations</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="center">VGG-16</td>
+<td align="center">90.0%</td>
+<td align="center">-</td>
+<td align="center">224 × 224</td>
+<td align="center">30.69 billion</td>
+</tr>
+<tr>
+<td align="center">Darknet-24</td>
+<td align="center">88.0%</td>
+<td align="center">-</td>
+<td align="center">224 × 224</td>
+<td align="center">8.52 billion</td>
+</tr>
+<tr>
+<td align="center">Darknet-19</td>
+<td align="center">91.2%</td>
+<td align="center">72.9%</td>
+<td align="center">224 × 224</td>
+<td align="center">5.58 billion</td>
+</tr>
+</tbody></table>
+<ol>
+<li><p>在 ImageNet 上训练 160 个 epochs。lr = 0.1，polynomial rate decay with a power of 4，weight decay = 0.0005，momentum = 0.9。随机裁剪、旋转、颜色和曝光调整。</p>
+</li>
+<li><p>High Resolution Classifier：ImageNet 训练是使用 224 × 224，这样在进行检测训练时，网络不仅要学习更大的 448 × 448 输入，还要同时学习检测任务。所以在 v2 中，会在 ImageNet 上使用 448 × 448 fine tune 10 个 epochs 再进行检测训练，lr = 10e-3。准确率达到 76.5%/93.3%。</p>
+</li>
+<li><p>Multi-Scale Training：接下来进行检测训练。训练中每过 10 个 epochs，会在 <code>{320, 352, ..., 608}</code> 中随机选择一个输入尺寸继续训练。共 160 个 epochs，lr = 10e-3，在 10、60、90 epoch 时减半。weight decay、momentum 与上面相同。</p>
+</li>
+</ol>
+<h2 id="Summary"><a href="#Summary" class="headerlink" title="Summary"></a>Summary</h2><div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-v2-improvement-path.png" target="_blank" rel="noopener" title="The path from YOLO to YOLOv2" data-caption="The path from YOLO to YOLOv2" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-v2-improvement-path.png" alt="The path from YOLO to YOLOv2"></a><span class="caption">The path from YOLO to YOLOv2</span></div><div style="clear:both;"></div>
+
+<p>上表总结了从 v1 到 v2 的各项改进，说明一下：表中的 anchor boxes 指的是人工指定的，固定尺寸和长宽比的 anchors，使用这种框，mAP 69.5 -&gt; 69.2，recall 81% -&gt; 88%，精度小幅下降召回明显提高，说明网络有较大提升空间，所以作者采取了下面的 k-means 聚类找出最佳初始尺寸的方法。对于这种聚类得到的框，作者叫它 dimension priors，可能应该翻译成「先验框」。但是我觉得它本质和 anchors 没什么差别，且对于网络的修改也沿用了，其实在 v3 中作者也管它叫 anchors 了，所以在上文没有区分。</p>
+<h2 id="Joint-train-on-object-detection-and-classification-YOLO9000"><a href="#Joint-train-on-object-detection-and-classification-YOLO9000" class="headerlink" title="Joint train on object detection and classification (YOLO9000)"></a>Joint train on object detection and classification (YOLO9000)</h2><p>基本思路是对于检测的数据传入，BP 整个网络，对于分类的数据传入，只 BP 有关分类的网络部分。一个问题是检测数据集如 COCO 提供的是一个很泛的类别，比如「狗」，共 80 类；而分类数据集如 ImageNet 提供的类别是很具体的，如「哈士奇」，共 21841 类。而 Softmax 意味着各类别之间是相互排斥的，而我们希望只在每个数据集内类别相互排斥，而数据集之间不是。</p>
+<p>下面仍然先要在分类上预训练，然后再训练检测。</p>
+<p><strong>Classification</strong></p>
+<p>ImageNet 的标签来自于 WordNet，一个语言数据集，它有详细的层级，比如 canine -&gt; dog -&gt; hunting dog -&gt; terrier -&gt; Norfolk terrier，但是它是一个 Graph 而不是 Tree，比如 dog 可以属于 canine 也可以属于 domestic animal，即有多个父节点。好在大多数类别通向 root 只有一条路径，对于有多条路径的，选择最短的路径，舍弃其它的，这样就可以构造一个 Word Tree。</p>
+<p>对于 ImageNet-1000，构建完整个图之后有 1369 个节点，增加了额外的 369 个节点。每一个节点预测一个条件概率，最终的概率需要将它们相乘，例如 <code>Pr(Norfolk terrier) = Pr(Norfolk terrier|terrier) * Pr(terrier|hunting dog) ∗ ... ∗ Pr(mammal|animal) * Pr(animal|physical object) * Pr(physical object)</code>。对于分类，每张图都有物体，所以这里最后一项 <code>Pr(physical object) = 1</code>。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-prediction-on-wordtree1k.png" target="_blank" rel="noopener" title="Prediction on ImageNet vs WordTree" data-caption="Prediction on ImageNet vs WordTree" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-prediction-on-wordtree1k.png" alt="Prediction on ImageNet vs WordTree"></a><span class="caption">Prediction on ImageNet vs WordTree</span></div><div style="clear:both;"></div>
+
+<p>在 ImageNet 上使用这个图训练网络，预测的形式如上图右侧，在每层级下分别 Softmax。一张图片会顺着这个 tree（可参考下面的图）走到 root，获得路径上的所有标签，即一张图现在有多个标注。这样训练的结果为 71.9%/90.4%。新增节点后准确率下降不多，同时如果网络见到了一个没训练过的狗的品种，那么预测中「狗」的概率会很大，同时所有具体类别的概率又很小。</p>
+<p><strong>Detection</strong></p>
+<p>对于框的分类结果，检测中每个格子内不一定有物体， <code>Pr(physical object)</code> 根据 confidence/objectness 分数（BBox 的第五个预测值）确定。判断一个框的类别时，从 WordTree 根节点开始向下遍历，对每一个节点，在它的所有子节点中，选择概率最大的那个（一个节点下面的所有子节点是互斥的），一直向下遍历直到某个节点的子节点概率低于设定的阈值（意味着很难确定它的下一层对象到底是哪个），或达到叶子节点，那么该节点就是对应的对象。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-combine-coco-and-imagenet.png" target="_blank" rel="noopener" title="Combining datasets using WordTree hierarchy" data-caption="Combining datasets using WordTree hierarchy" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-combine-coco-and-imagenet.png" alt="Combining datasets using WordTree hierarchy"></a><span class="caption">Combining datasets using WordTree hierarchy</span></div><div style="clear:both;"></div>
+
+<p>训练总共选取了 9000 类，含有 COCO、ImageNet 分类和检测数据集。为了构造 Tree 产生的父节点，构造的方法与之前相同，加起来共 9418 类。Oversampling COCO 使得数据量之比为 4:1。</p>
+<p>网络结构和 v2 相同，先验框的尺寸改为 3 种。标注和反向传播与之前类似，（1）对于检测数据集图像，loss 与之前相同，只是这里对于 class，只反向传播标注的那个节点及其父节点上的 loss，不 BP 其子节点上的；（2）对于分类数据集图像，首先找到 GT 所属类别的预测值最高的那个框，只反向传播这个框上的 class 和 objectness 部分，四个坐标不反向传播。对于 class，与检测的相同，只看其和其父节点的，对于 objectness，原文是「We also assume that the predicted box overlaps what would be the ground truth label by at least .3 IOU and we backpropagate objectness loss based on this assumption.」，我觉得意思是说如果预测的 <code>objectness = Pr(object) * IoU</code> 小于 <code>1 * 0.3</code> 的话就有一个损失在上面，具体损失形式需要以后看一下代码了更新。</p>
+<p><strong>Results</strong></p>
+<p>作者在 ImageNet Detection 上测试，其中 44 类是与 COCO 相同的，156 类是 COCO 中没有只出现在 ImageNet Classification 的。结果是 19.7 mAP，在不重合的 156 类上有 16.0 mAP。具体来看不重合的类别部分，对于各种动物，COCO 中有一些动物的标注，对于新动物的类别的表现不错：<code>red panda = 50.7, fox = 52.1, koala bear = 54.3, tiger = 61.0, armadillo = 61.7</code>；对于一些 COCO 中完全没有相关（类似）的类别的，表现很差：<code>diaper = 0.0, horizontal bar = 0.0, rubber eraser = 0.0, sunglasses = 0.0, swimming trunks = 0.0</code>。</p>
+<h1 id="YOLOv3-An-Incremental-Improvement"><a href="#YOLOv3-An-Incremental-Improvement" class="headerlink" title="YOLOv3: An Incremental Improvement"></a>YOLOv3: An Incremental Improvement</h1><p>YOLOv3 和 v4 都是 tech report，更多是把别人的工作在保证速度前提下整合进 YOLO 以提高精度。</p>
+<p>每一代 YOLO 都对网络或是说 backbone 进行了改进，YOLOv3 更是主要集中在这个网络上。</p>
+<h2 id="Network"><a href="#Network" class="headerlink" title="Network"></a>Network</h2><p>YOLOv3 同样是先有一个检测网络，在 ImageNet 上预训练，然后改为检测网络训练。下图（右侧是左侧红线部分）是 DarkNet-53，含有 52 个卷积和 1 个全连接。可以看到，与 DarkNet-19 相比，层数多了不少，主要的改变在于：</p>
+<ol>
+<li><p>去掉了池化层，全部由一个步长为 2 的卷积层完成下采样。</p>
+</li>
+<li><p>最后的全连接层又回来了。</p>
+</li>
+<li><p>内部出现了类似于 ResNet 的残差连接。</p>
+</li>
+</ol>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-darknet-53-classification.png" target="_blank" rel="noopener" title="Darknet-53 for classification" data-caption="Darknet-53 for classification" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-darknet-53-classification.png" alt="Darknet-53 for classification"></a><span class="caption">Darknet-53 for classification</span></div><div style="clear:both;"></div>
+
+<table>
+<thead>
+<tr>
+<th align="center">backbone</th>
+<th align="center">top-1</th>
+<th align="center">top-5</th>
+<th align="center">测试尺寸</th>
+<th align="center">Ops</th>
+<th align="center">FPS</th>
+<th align="center">BFLOP/s</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="center">Darknet-19</td>
+<td align="center">74.1%</td>
+<td align="center">91.8%</td>
+<td align="center">256 × 256</td>
+<td align="center">7.29 B</td>
+<td align="center">171</td>
+<td align="center">1246</td>
+</tr>
+<tr>
+<td align="center">Darknet-53</td>
+<td align="center">77.2%</td>
+<td align="center">93.8%</td>
+<td align="center">256 × 256</td>
+<td align="center">18.7 B</td>
+<td align="center">78</td>
+<td align="center">1457</td>
+</tr>
+<tr>
+<td align="center">ResNet-101</td>
+<td align="center">77.1%</td>
+<td align="center">93.7%</td>
+<td align="center">256 × 256</td>
+<td align="center">19.7 B</td>
+<td align="center">53</td>
+<td align="center">1039</td>
+</tr>
+<tr>
+<td align="center">ResNet-152</td>
+<td align="center">77.6%</td>
+<td align="center">93.8%</td>
+<td align="center">256 × 256</td>
+<td align="center">29.4 B</td>
+<td align="center">37</td>
+<td align="center">1090</td>
+</tr>
+</tbody></table>
+<p>上述数据统一在 TitanX 下测试，最后一项 BFLOP/s 意味着 Darknet 对 GPU 的利用更好。</p>
+<p>再看检测网络，在这里作者引入了类似于 FPN 的多级预测结构。这个在论文里讲得有点零散混乱且没有结构图，我根据<a href="https://github.com/pjreddie/darknet/blob/master/cfg/yolov3.cfg" target="_blank" rel="noopener">代码</a>做了一个下面的网络结构图。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-darknet-53-detection.png" target="_blank" rel="noopener" title="Darknet-53 for detection" data-caption="Darknet-53 for detection" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-darknet-53-detection.png" alt="Darknet-53 for detection"></a><span class="caption">Darknet-53 for detection</span></div><div style="clear:both;"></div>
+
+<p>解释几点：</p>
+<ol>
+<li><p>每一个 Conv 都跟着一个 BN 和 leaky ReLU 激活层，最后每个 Prediction 是通过一个无 BN、linear 激活的 1 × 1 卷积层得到的，就是一般的预测层，在图中没有画出（也可认为绿色的 Prediction 就是这个卷积）。</p>
+</li>
+<li><p>每一个 Add 之后有一个 linear activation。</p>
+</li>
+<li><p>这里每个 Residual Unit 里面只有两层，与 ResNet 的不一样。上方蓝色的 <code>N×</code> 表示括号内的模块重复 N 次。</p>
+</li>
+<li><p>Conv 上方的尺寸是指经过这一层后的尺寸，以输入 <code>416 × 416</code> 为例。都是 CHW 的格式。</p>
+</li>
+<li><p>黄色的层是改为检测网络之后新加入的，白色的是原有的 Darknet-53 Backbone，共 52 层（去掉了最后的全连接）。</p>
+</li>
+</ol>
+<p>再看最后输出的 255 个通道是怎么回事，<code>255 = 3 × (80 + 5)</code>，首先这里是以 COCO 为基准了，不再使用 VOC 的，所以是 80；5 就是从 v1 一直延续来的；3 指的是三个 Anchors，在 v2 里是五个，而 v3 实际用了 9 个，平均分在三级预测上。在 COCO 上尺寸分别是 <code>(10×13),(16×30),(33×23),(30×61),(62×45),(59× 119), (116 × 90), (156 × 198), (373 × 326)</code>。</p>
+<h2 id="Other-Improvements"><a href="#Other-Improvements" class="headerlink" title="Other Improvements"></a>Other Improvements</h2><p><strong>Bounding Box Prediction (objectness)</strong></p>
+<p>对于 objectness 分数，YOLOv3 采用了 logistic regression，所以如果一个 BBox 与 GT 的交叠大于任何其它的 BBox，那么它的 objectness 分数应该为 <code>1</code>。训练使用 binary cross-entropy loss，不再是 SSE loss。</p>
+<p>同时引入了类似 RPN 的匹配机制：如果一个框与 GT 的交叠大于一个阈值 <code>0.5</code> 但它又不是交叠最大的框，那么这个将作为非正非负的样本，在训练时被忽略。</p>
+<p>同样，一个 GT 只会与一个 Anchor/BBox 匹配上，对于没有匹配上的负样本，loss 中将没有 coordinate 和 class predictions 部分，只有 objectness loss。</p>
+<p><strong>Class Prediction (classes)</strong></p>
+<p>作者去掉了之前使用的 Softmax 进行类别分类，因为发现对准确率没有帮助，且一个大型数据集如 Open Images 上面有一些交叠的类别，比如 Woman - Person。使用 independent logistic classifiers 预测，并设定一个阈值，高于这个阈值的类别将被赋给对应的框。训练使用 binary cross-entropy loss，不再是 SSE loss。</p>
+<h2 id="Results"><a href="#Results" class="headerlink" title="Results"></a>Results</h2><div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-v3-results-on-coco-test-dev.png" target="_blank" rel="noopener" title="YOLO v3 results on COCO test-dev" data-caption="YOLO v3 results on COCO test-dev" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-v3-results-on-coco-test-dev.png" alt="YOLO v3 results on COCO test-dev"></a><span class="caption">YOLO v3 results on COCO test-dev</span></div><div style="clear:both;"></div>
+
+<p>从上表可以看出，YOLOv3-608 在 COCO 上的结果以及到了和 ResNet-FasterRCNN 接近的水平，但是时间仅需 51ms，是后者的三倍多。同时，在 AP50 指标上 YOLO 表现得很好，说明很大一部分的问题来自于框的位置的不准确。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-v3-precision-speed-compare.png" target="_blank" rel="noopener" title="precision-speed compare on COCO test-dev" data-caption="precision-speed compare on COCO test-dev" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/yolo-v3-precision-speed-compare.png" alt="precision-speed compare on COCO test-dev"></a><span class="caption">precision-speed compare on COCO test-dev</span></div><div style="clear:both;"></div>
+
+
+
+<h1 id="YOLOv4-Optimal-Speed-and-Accuracy-of-Object-Detection"><a href="#YOLOv4-Optimal-Speed-and-Accuracy-of-Object-Detection" class="headerlink" title="YOLOv4: Optimal Speed and Accuracy of Object Detection"></a>YOLOv4: Optimal Speed and Accuracy of Object Detection</h1><p>YOLOv4 是一篇将其它人提出许多的方法整合进 YOLO 的文章，但有一个前提就是保证速度，所以有些方法做了一些改动。同时基于这个原则，作者希望能使用较亲民的设备进行训练和预测，所以所有涉及多 GPU 的方法比如 SyncBN 均不予考虑。相应的测试也选用单个 RTX 2080Ti/RTX 2070/GTX 1080Ti 这类游戏显卡（但是 2080Ti 这好像不是所有打游戏的都买得起的？）。不过这篇文章还挺好的，对检测的研究也进行了一个相应的划分总结，还是挺全面的像综述一样，值得看看原文，本文里只有 YOLOv4 用到了的方法的分析。</p>
+<p>其实我感觉很难写，因为涉及太多其它的文章，不知道简单几句能不能给一篇文章讲清楚。此外有些还是今年的，很新，我也没看过。。。</p>
+<p>总的来说，作者将其它人的工作划分为 Bag of freebies (BoF) 和 Bag of specials (BoS)。前者指在训练时候的一些方法，不影响预测时间和模型复杂度；而后者指的是整个构架的改动，对预测（时间）会有影响。我花了点时间给整理了一下，下面两个表是用到的所有方法和对应论文，没有对应论文的就是作者在 YOLOv4 中应用的一些简单 BoF，可以看到，这篇文章各种 tricks 真的巨多，我相信给其它算法这么一顿军训效果也能好不少的。不过别人已经测试好了，直接能用，也很实用对吧。</p>
+<br/>
+
+<table>
+<thead>
+<tr>
+<th align="center">Backbone BoF</th>
+<th align="center">arXiv</th>
+<th align="center">Detector BoF</th>
+<th align="center">arXiv</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="center">CutMix</td>
+<td align="center">ICCV 2019 <a href="https://arxiv.org/abs/1905.04899" target="_blank" rel="noopener">1905.04899</a></td>
+<td align="center">CIoU-loss</td>
+<td align="center">AAAI 2020 <a href="https://arxiv.org/abs/1911.08287" target="_blank" rel="noopener">1911.08287</a></td>
+</tr>
+<tr>
+<td align="center">DropBlock regularization</td>
+<td align="center">NIPS 2018 <a href="https://arxiv.org/abs/1810.12890" target="_blank" rel="noopener">1810.12890</a></td>
+<td align="center">DropBlock regularization</td>
+<td align="center"><a href="https://arxiv.org/abs/1810.12890" target="_blank" rel="noopener">1810.12890</a></td>
+</tr>
+<tr>
+<td align="center">Class label smoothing</td>
+<td align="center">CVPR 2016 <a href="https://arxiv.org/abs/1512.00567" target="_blank" rel="noopener">1512.00567</a></td>
+<td align="center">Cross mini-Batch Normalization (CmBN)</td>
+<td align="center"><a href="https://arxiv.org/abs/2002.05712" target="_blank" rel="noopener">2002.05712</a></td>
+</tr>
+<tr>
+<td align="center"></td>
+<td align="center"></td>
+<td align="center">Cosine annealing scheduler</td>
+<td align="center"><a href="https://arxiv.org/abs/1608.03983" target="_blank" rel="noopener">1608.03983</a></td>
+</tr>
+</tbody></table>
+<p>Others:</p>
+<ul>
+<li><p>BoF: Mosaic data augmentation.</p>
+</li>
+<li><p>Detector BoF: Eliminate grid sensitivity, Optimal hyper-parameters, Random training shapes, Self-Adversarial Training, Multiple anchors for a single ground truth.</p>
+</li>
+</ul>
+<br/>
+
+<table>
+<thead>
+<tr>
+<th align="center">Backbone BoS</th>
+<th align="center">arXiv</th>
+<th align="center">Detector BoS</th>
+<th align="center">arXiv</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="center">Mish activation</td>
+<td align="center"><a href="https://arxiv.org/abs/1908.08681" target="_blank" rel="noopener">1908.08681</a></td>
+<td align="center">Mish activation</td>
+<td align="center"><a href="https://arxiv.org/abs/1908.08681" target="_blank" rel="noopener">1908.08681</a></td>
+</tr>
+<tr>
+<td align="center">Cross-stage partial connections (CSP)</td>
+<td align="center"><a href="https://arxiv.org/abs/1911.11929" target="_blank" rel="noopener">1911.11929</a></td>
+<td align="center">SPP-block</td>
+<td align="center">TPAMI 2015 <a href="https://arxiv.org/abs/1406.4729" target="_blank" rel="noopener">1406.4729</a></td>
+</tr>
+<tr>
+<td align="center">Multi-input weighted residual connections (MiWRC)</td>
+<td align="center">CVPR 2020 <a href="https://arxiv.org/abs/1911.09070" target="_blank" rel="noopener">1911.09070</a></td>
+<td align="center">Path-aggregation block (PAN)</td>
+<td align="center">CVPR 2018 <a href="https://arxiv.org/abs/1803.01534" target="_blank" rel="noopener">1803.01534</a></td>
+</tr>
+<tr>
+<td align="center"></td>
+<td align="center"></td>
+<td align="center">SAM-block</td>
+<td align="center">ECCV 2018 <a href="https://arxiv.org/abs/1807.06521" target="_blank" rel="noopener">1807.06521</a></td>
+</tr>
+<tr>
+<td align="center"></td>
+<td align="center"></td>
+<td align="center">DIoU-NMS</td>
+<td align="center">AAAI 2020 <a href="https://arxiv.org/abs/1911.08287" target="_blank" rel="noopener">1911.08287</a></td>
+</tr>
+</tbody></table>
+<div class="alert warning"><p><del>仍需要一点时间施工，不过我猜要拖到五月底了。</del><br>已经到五月底了，然而事情很多，考虑到眼下两个月之内应该不会有机会看论文，所以我愉快地宣布下面的内容鸽子了 🐦。</p>
+</div>
+
+<h2 id="Bag-of-freebies"><a href="#Bag-of-freebies" class="headerlink" title="Bag of freebies"></a>Bag of freebies</h2><p>最常用的 bag of freebies 就是数据增强（data augmentation）了，YOLOv4 用了下面这些。</p>
+<p><strong>CutMix</strong></p>
+<p>CutMix 是一种 regional dropout strategy，这类方法通过去除一些 informative pixels 来使得网络学习图像中 less discriminative 部分的信息。</p>
+<p>关于训练时的标签和损失函数，YOLOv4 中使用了下面这些。</p>
+<p><strong>Class label smoothing</strong></p>
+<p>使得 class 标签不绝对，提升分类器效果。</p>
+<p><strong>CIoU Loss</strong></p>
+<p>直接以 IoU 作为 regression 的损失函数，提高了回归精度。从 IoU -&gt; GIoU -&gt; DIoU -&gt; CIoU 的变化过程，见 <a href="https://tangh.github.io/articles/improvements-of-regressor-in-detector/#Generalized-Intersection-over-Union-A-Metric-and-A-Loss-for-Bounding-Box-Regression-CVPR-2019">另一篇关于 regressor 的文中 IoU Loss 的部分</a>。</p>
+<h2 id="Bag-of-specials"><a href="#Bag-of-specials" class="headerlink" title="Bag of specials"></a>Bag of specials</h2><p><strong>Multi-input weighted residual connections (MiWRC)、Path-aggregation block (PAN)</strong></p>
+<p>前者为带权重的特征融合方式，后者为 neck 上的新的特征融合路径。见 <a href="https://tangh.github.io/articles/efficientnet-and-efficientdet/#Neck-BiFPN">另一篇关于 EfficientDet 文中 BiFPN 的部分</a>。</p>
+<p><strong>DIoU-NMS</strong></p>
+<p>在 NMS 时考虑两个 box 中心点之间的距离以稍微降低其 IoU 值的方法，见 <a href="https://tangh.github.io/articles/improvements-of-regressor-in-detector/#Distance-IoU-and-Complete-IoU">另一篇关于 regressor 的文中 DIoU 的部分</a>。</p>
+<br/>
+            
+
+
+        </div>
+    </div>
+    <div id="post-footer" class="post-footer main-content-wrap">
+        
+            <div class="post-footer-tags">
+                <span class="text-color-light text-small">TAGGED IN</span><br/>
+                
+    <a class="tag tag--primary tag--small t-link" href="/tags/Computer-Vision/" rel="tag">Computer Vision</a> <a class="tag tag--primary tag--small t-link" href="/tags/Deep-Learning/" rel="tag">Deep Learning</a> <a class="tag tag--primary tag--small t-link" href="/tags/Object-Detection/" rel="tag">Object Detection</a>
+
+            </div>
+        
+        
+            <div class="post-actions-wrap">
+    <nav>
+        <ul class="post-actions post-action-nav">
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/efficientnet-and-efficientdet/"
+                    data-tooltip="EfficientNet 和 EfficientDet"
+                    aria-label="PREVIOUS: EfficientNet 和 EfficientDet"
+                >
+                    
+                        <i class="fa fa-angle-left" aria-hidden="true"></i>
+                        <span class="hide-xs hide-sm text-small icon-ml">PREVIOUS</span>
+                    </a>
+            </li>
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/backward-in-convolutional-neural-networks/"
+                    data-tooltip="卷積神經網絡中的反向傳播"
+                    aria-label="NEXT: 卷積神經網絡中的反向傳播"
+                >
+                    
+                        <span class="hide-xs hide-sm text-small icon-mr">NEXT</span>
+                        <i class="fa fa-angle-right" aria-hidden="true"></i>
+                    </a>
+            </li>
+        </ul>
+    </nav>
+    <ul class="post-actions post-action-share">
+        <li class="post-action hide-lg hide-md hide-sm">
+            <a
+                class="post-action-btn btn btn--default btn-open-shareoptions"
+                href="#btn-open-shareoptions"
+                aria-label="Share this post"
+            >
+                <i class="fa fa-share-alt" aria-hidden="true"></i>
+            </a>
+        </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/yolo-from-v1-to-v4/"
+                    title="Share on Facebook"
+                    aria-label="Share on Facebook"
+                >
+                    <i class="fab fa-facebook" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/yolo-from-v1-to-v4/"
+                    title="Share on Twitter"
+                    aria-label="Share on Twitter"
+                >
+                    <i class="fab fa-twitter" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/yolo-from-v1-to-v4/"
+                    title="Share on Weibo"
+                    aria-label="Share on Weibo"
+                >
+                    <i class="fab fa-weibo" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/yolo-from-v1-to-v4/&amp;title=实时目标检测方法 YOLO — 从 V1 到 V4"
+                    title="Share on QQ"
+                    aria-label="Share on QQ"
+                >
+                    <i class="fab fa-qq" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+        
+            
+                <li class="post-action">
+                    <a
+                        class="post-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                        <i class="fa fa-comment"></i>
+                    </a>
+                </li>
+            
+        
+        <li class="post-action">
+            
+                <a class="post-action-btn btn btn--default" href="#table-of-contents" aria-label="Table of Contents">
+            
+                <i class="fa fa-list" aria-hidden="true"></i>
+            </a>
+        </li>
+    </ul>
+</div>
+
+
+        
+        
+            
+                <div id="gitalk"></div>
+
+            
+        
+    </div>
+</article>
+
+
+
+                <footer id="footer" class="main-content-wrap">
+    <span class="copyrights">
+        Copyrights &copy; 2021 Tang Huan. All Rights Reserved.
+    </span>
+</footer>
+
+            </div>
+            
+                <div id="bottom-bar" class="post-bottom-bar" data-behavior="4">
+                    <div class="post-bar-actions-wrap">
+    <div class="post-actions post-action-share">
+        <div class="post-action">
+            
+                <a class="post-bar-action-btn btn btn--default" href="#table-of-contents" aria-label="Table of Contents">
+            
+                <i class="fas fa-angle-up" aria-hidden="true"></i>
+            </a>
+        </div>
+        
+            
+                <div class="post-action">
+                    <a 
+                        class="post-bar-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                         <i class="fas fa-angle-down"></i>
+                    </a>
+                </div>
+            
+        
+    </div>
+</div>
+                </div>
+                
+    <div id="share-options-bar" class="share-options-bar" data-behavior="4">
+        <i id="btn-close-shareoptions" class="fa fa-times"></i>
+        <ul class="share-options">
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/yolo-from-v1-to-v4/"
+                        aria-label="Share on Facebook"
+                    >
+                        <i class="fab fa-facebook" aria-hidden="true"></i><span>Share on Facebook</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/yolo-from-v1-to-v4/"
+                        aria-label="Share on Twitter"
+                    >
+                        <i class="fab fa-twitter" aria-hidden="true"></i><span>Share on Twitter</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/yolo-from-v1-to-v4/"
+                        aria-label="Share on Weibo"
+                    >
+                        <i class="fab fa-weibo" aria-hidden="true"></i><span>Share on Weibo</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/yolo-from-v1-to-v4/&amp;title=实时目标检测方法 YOLO — 从 V1 到 V4"
+                        aria-label="Share on QQ"
+                    >
+                        <i class="fab fa-qq" aria-hidden="true"></i><span>Share on QQ</span>
+                    </a>
+                </li>
+            
+        </ul>
+    </div>
+
+
+            
+        </div>
+        
+
+
+    
+        
+    
+
+<div id="about">
+    <div id="about-card">
+        <div id="about-btn-close">
+            <i class="fa fa-times"></i>
+        </div>
+        
+            <img id="about-card-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+            <h4 id="about-card-name">Tang Huan</h4>
+        
+            <div id="about-card-bio"></div>
+        
+        
+            <div id="about-card-job">
+                <i class="fa fa-briefcase"></i>
+                <br/>
+                
+            </div>
+        
+        
+            <div id="about-card-location">
+                <i class="fa fa-map-marker-alt"></i>
+                <br/>
+                Shanghai
+            </div>
+        
+    </div>
+</div>
+
+        
+        
+<div id="cover" style="background-image:url('/assets/images/cover.jpg');"></div>
+        
+
+<!--SCRIPTS-->
+
+<script src="/assets/js/script-21vlobaq8sfmdbypn0z91hl6jyot6shixuux8ijser2jcbktmikbwlb6yvjx.min.js"></script>
+
+<!--SCRIPTS END-->
+
+
+    
+      <script type="text/javascript">
+        (function() {
+          function render() {
+            new Gitalk({
+              clientID: 'b7b365f41dbbfaaf9b88',
+              clientSecret: '25de272b8030e3c498dd56b883e4386d881b6d62',
+              repo: 'tangh.github.io',
+              owner: 'tangh',
+              admin: ['tangh'],
+              id: 'articles/yolo-from-v1-to-v4',
+              title: document.title.replace(' - 雨天等放晴', ''),
+              ...{"language":"en","perPage":10,"distractionFreeMode":false,"enableHotKey":true,"pagerDirection":"first","createIssueManually":true}
+            }).render('gitalk');
+          }
+          var gc = document.createElement('script');
+          gc.type = 'text/javascript';
+          gc.src = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js';
+          gc.charset = 'UTF-8';
+          gc.onload = render;
+          gc.async = true;
+          document.querySelector('body').appendChild(gc);
+          var gcs = document.createElement('link');
+          gcs.href = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.css';
+          gcs.type = 'text/css';
+          gcs.rel = 'stylesheet';
+          gcs.media = 'screen,print';
+          document.querySelector('head').appendChild(gcs);
+        })();
+      </script>
+    
+
+
+
+
+    <script>!function(e){var c=Array.prototype.slice.call(document.querySelectorAll("img[data-original]"));function i(){for(var r=0;r<c.length;r++)t=c[r],(n=t.getBoundingClientRect()).top>=-n.height&&0<=n.left&&n.top<=1.5*(e.innerHeight||document.documentElement.clientHeight)&&function(){var t,n,e,i,o=c[r];t=o,n=function(){c=c.filter(function(t){return o!==t})},e=new Image,i=t.getAttribute("data-original"),e.onload=function(){t.src=i,n&&n()},e.src=i}();var t,n}i(),e.addEventListener("scroll",function(){var t,n;t=i,n=e,clearTimeout(t.tId),t.tId=setTimeout(function(){t.call(n)},500)})}(this);</script><!-- hexo-inject:begin --><!-- Begin: Injected MathJax -->
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config("");
+</script>
+
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Queue(function() {
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i=0; i < all.length; i += 1) {
+      all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+  });
+</script>
+
+<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
+</script>
+<!-- End: Injected MathJax -->
+<!-- hexo-inject:end --></body>
+</html>

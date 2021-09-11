@@ -1,0 +1,1043 @@
+
+<!DOCTYPE html>
+
+    <html lang="zh-Hant-CN">
+
+    
+<head>
+    <!-- hexo-inject:begin --><!-- hexo-inject:end --><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="generator" content="雨天等放晴">
+    <title>目標檢測中定位準確性的改進方法 - 雨天等放晴</title>
+    <meta name="author" content="Tang Huan">
+    
+        <meta name="keywords" content="IoU-Net,GIoU,DIoU,CIoU,Regressor,Object Detection,目标检测,目標檢測">
+    
+    
+        <link rel="icon" href="https://tangh.github.io/assets/images/favicon.png">
+    
+    
+        <link rel="apple-touch-icon" sizes="180x180" href="https://tangh.github.io/assets/images/apple-touch-icon.png">
+    
+    
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg"},"articleBody":"\n\n常見的 Detector 中，（除 YOLO 系列有些許不同之外），通常的做法是通過 CNN 得到一個框的類別置信度（cls）和回歸量（reg）。首先對所有的框應用 reg，然後去除掉所有 cls 分数小於設定閾值的，再對餘下的進行 NMS。NMS 的依據是高 cls 分数抑制低分数的。對於預測值的訓練，首先會對回歸後的框進行一次 GT 匹配，這樣就找到所有框和對應 GT 的真實偏差值 reg&#39;，計算 reg&#39; 和 reg 之間的 SmoothL1 Loss 值，反向傳播，即可得到更準確的 reg。\n這個過程中可以看出兩個影響「位置」準確的地方：第一個是 NMS 時，更高 cls 分数的框不代表它的位置更接近於 GT，而需要的偏移越小顯然越容易預測準確（從 YOLOv2 引入 Anchors 也可以看出）；第二個是 Smooth-L1 的值，不直接反應 IoU 的大小，即 SmoothL1 小不一定代表 IoU 更大。\n下面針對這兩個問題介紹幾篇文章。\n\n\n\n\nAcquisition of Localization Confidence for Accurate Object Detection (ECCV 2018)Problems上述第一個問題，帶來兩個後果：\n\n如下圖（1），cls 高的不代表定位更準確（黃色為 GT），所以需要得到一個與位置直接相關的指標在 NMS 中使用，這個指標最好就是 IoU 預測值。作者提出了 Loc Conf 即預測某一個 box 和對應 GT 之間當前的 IoU，具體見下文。\n\n(1) misalignment between classification confidence and localization accuracy\n\n  圖（2）表示 NMS 之前，一個 box 與其匹配到的 GT 之間的 IoU，與 Cls Conf（左）和 Loc Conf（右）之間的相關性。同樣可以看出，Cls Conf 與 IoU 之間的相關性較小。Pearson correlation coefficients 分別為 0.217; 0.617。\n(2) correlation between the IoU and classification/localization confidence\n\n  圖（3）表示 NMS 之後剩下的正樣本 box 的数量，與（其匹配到的 GT 之間的※）IoU 之間的關係。No-NMS 表示 NMS 之前的数量，也就是這個 IoU 範圍下最多的 box 数量。圖中可以看出，以 Loc Conf 作為指標，NMS 留下的 box 中 IoU 大的数量增多，小的数量減少（總数量接近）。\n  ※如果一個 GT 匹配到了多個預測 box，那麼只有與其 IoU 最高的被計作正樣本\n(3) number of positive bounding boxes after NMS\n\n\n以 cls 為指標，會使得回歸過程難以解釋。如下圖（4），由於缺少反應位置準確程度的預測，如果直接簡單地多次進行回歸（Regression-Based, Recursive/Cascade），位置反而會偏移更大。除了新的指標之外還需要探究一下使得 IoU 隨著迭代次数單調增加的方法。\n回歸過程可以用以下公式描述：$$c^* = \\text{argmin}_{c} \\ crit(\\text{transform}(box_\\text{det},\\ c), box_\\text{gt})$$\nRegression-Based 的方法即直接估計最佳的 c* 然後應用変換，作者提出了 Optimization-Based 的回歸方法，具體見下文。\n\n\n(4) non-monotonic localization\n\n  圖（5）是 Optimization-Based 和 Regression-Based 的方法隨著迭代次数的增加 AP 的変化。對於 FPN，iter = 0 代表 RPN，iter = 1 表示的是 Head；對於 Cascade R-CNN，iter = 0, 1, 2 分別表示其 1st, 2nd and 3rd regression stages (H1, H2, H3)。可以看出，隨著迭代次数增加到一定程度後，AP 值在 Regression-Based 的方法中會下降。\n(5) AP drop in regression-based methods\n\n\nIoU-Net為解決上述兩個問題，作者提出了以 Loc Conf 為指標的 Optimization-Based 的網絡，稱作 IoU-Net。\narchitecture of proposed IoU-Net\n\n網絡主要多出一支平行的 class-aware IoU 預測，有了這個分支，就可以得到一個 box 的 IoU（與匹配的 GT 之間的），這就跟得到 cls 分数是一樣的原理和操作。此外將 RoIAlign 換成了 PrRoI Pooling。Jittered RoIs 是訓練時需要用到的。\nLoc Conf, IoU-guided NMS按照上面的新分支，得到了 IoU 的預測值後，可以通過下面的算法進行 IoU-guided NMS。\n123456789101112131415161718192021222324252627Algorithm 1: IoU-guided NMS.Classification confidence and localization confidence are disentangled in the algorithm.We use the localization confidence (the predicted IoU) to rank all detected bounding boxes,and update the classification confidence based on a clustering-like rule.&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;Input: B &#x3D; &#123;b1, ..., bn&#125;, S, I, ΩnmsB is a set of detected bounding boxes.S and I are functions (neural networks) mapping bounding boxes totheir classification confidence and IoU estimation (localization confidence) respectively.Ωnms is the NMS threshold.Output: D, the set of detected bounding boxes with classification scores.&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;1:  D ← ∅2:  WHILE B !&#x3D; ∅ DO:3:      bm ← argmax I(bj)4:      B ← B \\ &#123;bm&#125;5:      s ← S(bm)6:      FOR bj ∈ B DO:7:          IF IoU(bm,bj) &gt; Ωnms THEN:8:              s ← max(s,S(bj))9:              B ← B \\ &#123;bj&#125;10:         END IF11:     END FOR12:     D ← D ∪ &#123;⟨bm, s⟩&#125;13: END WHILE14: RETURN D\n\n主要的改動在 line3, line8，使用 IoU 代替 cls 作為排序指標，並且，對於一系列對於同一個物體的重複預測，留下的 box 的 cls 會取這一系列中最大值。\nRefinement as an optimization procedure這裡是一種與之前不同的更新 box 坐標的方法：\n12345678910111213141516171819202122232425Algorithm 2: Optimization-based bounding box refinement.&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;Input: B &#x3D; &#123;b1, ..., bn&#125;, F, T&#x3D;5, λ&#x3D;0.5, Ω1&#x3D;0.001, Ω2&#x3D;-0.01B is a set of detected bounding boxes, in the form of (x0, y0, x1, y1).F is the feature map of the input image.T is number of steps. λ is the step size, and Ω1 is an early-stop threshold,and Ω2 &lt; 0 is an localization degeneration tolerance.Function PrPool extracts the feature representation for a given bounding box,and function IoU denotes the estimation of IoU by the IoU-Net.Output: The set of final detection bounding boxes.&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;1:  A ← ∅2:  FOR i&#x3D;1 to T DO:3:      FOR bj ∈ B and bj !∈ A DO:4:          grad ← ∇bj&#123; IoU(PrPool(F, bj)) &#125;5:          PrevScore ← IoU(PrPool(F, bj))6:          bj ← bj + λ * scale(grad,bj)7:          NewScore ← IoU(PrPool(F, bj))8:          IF |PrevScore − NewScore| &lt; Ω1 or NewScore − PrevScore &lt; Ω2 THEN:9:              A ← A ∪ &#123;bj&#125;10:         END IF11:     END FOR12: END FOR13: RETURN B\n\nline4 表示計算 通過 PrPool 採樣之後再通過 IoU 分支得到的 IoU，計算關於 box{bj} 四個坐標的梯度。line6 是更新坐標的核心，scale() 是進行對之前得到的 grad{x0, y0, x1, y1} 進行一次調整，依據是所在的軸，例如對 ∇x 則在梯度上乘以 width(bj)。注意第一次仍需要通過網絡得到的 B-B-Reg 進行一次通常的 Reg-Based 回歸。\nPrecise RoI Pooling (PrRoI Pooling)RoIPooling 和 RoIAlign 在這裡的主要問題是它對於 box 的坐標不連續可導（box 的坐標不一定為整数），使用上面的新回歸方法相當於在 Pooling 层中需要額外計算一個對參数的梯度了（普通的 Pooling 层和 RoIPooling/RoIAlign 是不含參数的），所以作者提出了 PrRoI Pooling。\n首先，需要得到一個連續取值的 feature map f(x,y)：\n$$f(x, y) = \\sum_{i, j} max(0, \\ 1-|x-i|) \\times max(0,\\ 1-|y-j|) \\ \\times \\ w_{i, j}$$\n然後可以通過積分除以面積得到 Pooling 值：\n$$\\text{PrPool} (bin ,\\ \\mathcal{F}) = \\frac{\\int_{y_1}^{y_2} \\int_{x_1}^{x_2} f(x, y) \\ dxdy}{(x_2 - x_1) \\times (y_2 - y_1)}$$\n這樣，對任意一點的導数為（以 x1 為例）：\n$$\\frac{\\partial \\text{PrPool} (bin, \\mathcal{F})}{\\partial x_1} = \\frac{\\text{PrPool}(bin, \\mathcal{F})}{x_2 - x_1} - \\frac{\\int_{y_1}^{y_2} f(x_1, y) dy}{(x_2 - x_1) \\times (y_2 -y_1)}$$\n下圖是三種 RoI Pooling 的對比。\nRoI Pooling, RoI Align and PrRoI Pooling\n\n\nTraining, Inference and Results訓練是 e2e 的，只是對於 IoU 分支，訓練使用的是通過 GT augmenting 得到的 Jittered RoIs，而不是 RPN 得到的 RoIs。生成方式是通過一些隨機參数從 GT 変換出一系列 box，然後去除與匹配到的 GT 之間的 IoU 小於 0.5 的，並且根據不同的 IoU 均勻地採樣。損失函数使用 Smooth-L1。\narchitecture of proposed IoU-Net\n\n預測時，首先通過一般的結構部分得到 cls 和 reg，然後進行一次正常的回歸，然後進行 IoU-guided NMS，剩下的 box 中 cls 分数前 100 的將使用 optimization-based regression 進行進一步地 regression。\n簡略的實驗（單項增加 Soft-NMS/IoU-NMS/Refine）結果如下表（COCO trainval35k 訓練，minival5k 測試）：\n\n\n\nMethod\nBaseline\n+Soft-NMS\n+IoU-NMS\n+Refine\n\n\n\nFPN\n36.4\n36.8\n37.3\n38.0\n\n\nCascade R-CNN\n40.6\n40.9\n40.7\n41.4\n\n\nMask R-CNN\n37.5\n37.9\n38.1\n39.2\n\n\n聯合訓練後的最終結果為 ResNet-50：38.1，ResNet-101：40.6。\nGeneralized Intersection over Union: A Metric and A Loss for Bounding Box Regression (CVPR 2019)開頭的第二個問題，從下面的圖中可以看出。\ndifferent iou but same norm distance (a)L2 (b)L1\n\n圖中黑色的框為預測的，綠色的為 GT。圖（a）是以 L2-norm 為距離指標，假設框是 xyxy 形式的。如果預測和 GT 的一個角（左下）之間的距離是固定的，那麼如果預測的 box 的對角，在一個以 GT 對角為圓心的圓周上，那麼所有預測框都會有相同的 L2 距離，但是他們的 IoU 卻有很大差別。圖（b）是以 L1-norm 為距離指標的三種情況。\n此外，IoU 被設計成 scale invariant，而 l-norm 不是。所以有相同 IoU 的不同尺寸的 box 得到的 loss 也會不同。\n直接使用 IoU 的問題：如果兩個框完全不相交，那麼 Iou = 0，不能反應他們之間的距離，所以提出 Generalized IoU，计算方式如下：\n12345678Algorithm 1: Generalized Intersection over Union.&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;input: Two arbitrary convex shapes: A, B ⊆ S ∈ R^noutput: GIoU&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;1: For A and B, find the smallest enclosing convex object C, where C ⊆ S ∈ R^n (same shape and dimensions)2: IoU &#x3D; |A∩B| ÷ |A∪B|3: GIoU &#x3D; IoU − |C\\(A∪B)| ÷ |C|\n\nline1 裡 C ⊆ S 即相同的空間和形狀，如果原來是橢圓，則 C 也用橢圓包圍。原來是矩形 box，那麼 C 也是矩形。\nGIoU 具有以下特性，所以可以作為 IoU 的一種替代：\n\n與 IoU 相同，GIoU 作為距離時（例如 Loss(GIoU) = 1 - GIoU），包含作為度量的所有属性，例如非負性，對稱性等；\n\n與 IoU 相同，GIoU 同樣具有尺度不変性；\n\nGIoU 總是 IoU 的下界，即同樣的兩個框計算出的 GIoU(A,B) &lt;= IoU(A,B)，且 AB 形狀越相似距離越接近， GIoU 越接近於 IoU。所以 GIoU 是與 IoU 有強相關性的（特別是 IoU 較高時），下圖是隨機取 10K 個 box 計算得到的相關性圖；\n\nGIoU 具有對稱的範圍：-1 &lt;= GIoU(A,B) &lt;= 1。\n\n\ncorrelation between GIoU and IOU\n\n上述特性使得使用 GIoU 作為 Loss 是一種理想的選擇。對於一些奇特的形狀，可能有些地方的導数需要單獨再看看，但是對於 2D Detection，所有的 box 的兩軸都是平行的，所以計算 IoU 和 GIoU 只需要用到 min, max 和一些 piece-wise linear 的函数，他們都是可導的（Algorithm 1 中每一步都可導），所以可直接用作為損失函数 Loss(GIoU) = 1 - GIoU。對於 IoU，在所有沒有交疊的情況都是沒有梯度的，而 GIoU 對於任何情況都有梯度。\n對於 IoU &gt; 0 的情況，Loss(GIoU) = 1 - GIoU 顯然鼓勵 IoU 增大。對於 IoU = 0 的情況，$$\\begin{aligned}\\mathcal{L}_{IoU} = 1 - GIoU &amp;= 1 + \\frac{Area(C) - Union(A, B)}{Area(C)} - IoU \\\\&amp;= 2 - \\frac{Union(A, B)}{Area(C)}\\end{aligned}$$\n損失函数在鼓勵 \\( 0 \\leq \\frac{Union(A, B)}{Area(C)} \\leq 1 \\) 增大，而這一項的增大需要 Bp 和 Bg 逐漸靠近，使得 IoU ≠ 0。\n簡略的實驗結果如下表（COCO trainval35k 訓練，minival5k 測試）。\nMask R-CNN with ResNet-50：\n\n\n\nLoss\nAP (IoU[.5 : .95])\nAP (GIoU[.5 : .95])\nAP75 (IoU)\nAP75 (GIoU)\n\n\n\nSmooth-L1 (Original)\n0.366\n0.356\n0.397\n0.385\n\n\nLoss IoU\n0.374\n0.364\n0.404\n0.393\n\n\nLoss GIoU\n0.376\n0.366\n0.405\n0.395\n\n\nYOLOv3 with Darknet-608:\n\n\n\nLoss\nAP (IoU[.5 : .95])\nAP (GIoU[.5 : .95])\nAP75 (IoU)\nAP75 (GIoU)\n\n\n\nMSE (Original)\n0.314\n0.302\n0.329\n0.317\n\n\nLoss IoU\n0.322\n0.313\n0.345\n0.335\n\n\nLoss GIoU\n0.335\n0.325\n0.359\n0.348\n\n\n可以看到對於 YOLO 這類位置準確度本來就較差的算法提升更加顯著。\nDistance-IoU Loss: Faster and Better Learning for Bounding Box Regression (AAAI 2020)GIoU 嚴重依賴 IoU 項，它們的問題主要是收斂緩慢，回歸不精確。\n\nGIoU 會使得 box 先增大，使得有交疊出現，然後最大化交疊面積。\n\nCompare GIoU (first row) with DIoU (second row). GREEN: target, BLACK: anchor\n\n\n對於一個 box 包含另一個 box 的情況，GIoU 和 IoU 是相等的。\n\nGIoU loss degrades to IoU loss for these cases\n\nDistance-IoU DIoU，引入 normalize 後的中心點距離，直接減少這個距離，使得收斂加快和精確。Complete-IoU CIoU，考慮交疊面積、中心點距離和長寬比。此外，不僅可用作 Loss，DIoU 還可以用在 NMS，即同時考慮交疊面積比和中心點距離，使得遮擋的情況下的錯誤減少。\nSimulation Experiment使用模擬實驗來驗證有效性，共有七個不同長寬比（1:4, 1:3, ... , 4:1）的單位面積的 target boxes（綠色），中心固定在 (10, 10)。在半徑為 3 的面積內隨機選擇 5000 個點放置 Anchors，每組 Anchors 有七種不同的面積（0.5, 0.67, 0.75, 1, 1.33, 1.5 and 2）+ 長寬比（1:4, 1:3, ... , 4:1）組合，所以共 5000 × 7 × 7 個 Anchors。\n應用梯度下降可以更新 Anchors 的位置：$$B_i^t = B_i^{t-1} + \\eta (2 - IoU_i^{t-1}) ∇ B_i^{t-1}$$\n其中 η 是 step，2 - IoU 是加速回歸的項，performance (error) 使用 l1-norm 表示。實驗結果如下圖。\nreg simulation experiments\n\n下面的圖是在 final iteration T 的 error 可視化，坐標與上圖相同。可以看到 IoU Loss 在非交疊的情況下 error 都較大（由於 ∇B ≡ 0 所以 box 不會移動）。而 GIoU Loss 谷地較大表示其有效區域更大，但在水平和垂直方向上 error 較大（C − A ∪ B 在這兩個方向通常較小或為零，GIoU 退化為 IoU）。而 DIoU Loss 在各處的 error 都較小。\nvisualization of regression errors of IoU, GIoU and DIoU losses\n\n\nDistance-IoU and Complete-IoUDIoU 直接減少兩個 box 中心點之間的距離：$$\\mathcal{L}_{DIoU} = 1 - IoU + \\mathcal{R}_{DIoU}= 1 - IoU + \\frac{\\rho^2 (\\text{b}, \\text{b}^{gt})}{c^2}$$\n其中 b 和 b^gt 表示兩個中心點，ρ 表示 Euclidean distance，c 表示 smallest enclosing box 的對角線長度。\nDIoU 同樣有與 GIoU 類似的特點：\n\nscale invariant\n\nprovide moving directions non-overlapping boxes\n\n完全重合： L{IoU} = L{GIoU} = L{DIoU} = 0；相隔無限遠：L{GIoU} = L{DIoU} → 2\n\n\n同時 DIoU 的額外優點是：直接 minimize 距離，收斂快。即使在包含、在水平垂直方向時，收斂都非常快。\n在此基礎上，提出 CIoU，使得回歸過程更精確和迅速。CIoU 在 DIoU 的基礎上多了一項保持長寬比一致的項：\n$$\\mathcal{L}_{CIoU} = 1 - IoU + \\mathcal{R}_{CIoU}= 1 - IoU + \\mathcal{R}_{DIoU} + \\alpha v$$\n$$\\begin{aligned}v &amp;= \\frac{4}{\\pi^2} (arctan \\frac{w^{gt}}{h^{gt}} - arctan \\frac{w}{h})^2 \\\\\\alpha &amp;= \\frac{v}{(1 - IoU) + v}\\end{aligned}$$\nα 是正的 trade-off 項，4 / pi^2 使得長寬比損失限制在 [0, 1]。\n這裡有一點需要注意，對於 v 的導数\n$$\\frac{\\partial v}{\\partial w} = \\frac{8}{\\pi^2} (arctan \\frac{w^{gt}}{h^{gt}} - arctan \\frac{w}{h}) \\ \\times \\ \\frac{h}{w^2 + h^2}$$\n∂h 同理，只需替換最後一項的分子。w2 + h2 通常是一個很小的数，這會導致梯度很大，所以求梯度值時分母直接用 1 替代，這樣梯度方向相同但是数值減小。\nNMS using DIoU使用 DIoU 替換原始 NMS 中的 IoU，即 IoU - R{DIoU}。表示如果兩個 box 的中心點較遠，那麼它們可能表示兩個物體。\nResults\nYOLOv3 (Darknet-608) 在 VOC 07+12 訓練，07 test 測試。\n\n\n\n\nLoss\nAP (IoU[.5 : .95])\nAP (GIoU[.5 : .95])\nAP75 (IoU)\nAP75 (GIoU)\n\n\n\nLoss IoU\n46.57\n45.82\n49.82\n48.76\n\n\nLoss GIoU\n47.73\n46.88\n52.20\n51.05\n\n\nLoss DIoU\n48.10\n47.38\n52.82\n51.88\n\n\nLoss CIoU\n49.21\n48.42\n54.28\n52.87\n\n\nLoss CIoU with DIoU NMS\n49.32\n48.54\n54.74\n53.30\n\n\n\nFaster R-CNN 在 COCO 17 train 上訓練，在 17 val 上測試。\n\n\n\n\nLoss\nAP\nAP75\nAPs\nAPm\nAPl\n\n\n\nLoss IoU\n37.93\n40.79\n21.58\n40.82\n50.14\n\n\nLoss GIoU\n38.02\n41.11\n21.45\n41.06\n50.21\n\n\nLoss DIoU\n38.09\n41.11\n21.66\n41.18\n50.32\n\n\nLoss CIoU\n38.65\n41.96\n21.32\n41.83\n51.51\n\n\nLoss CIoU with DIoU NMS\n38.71\n42.07\n21.37\n41.93\n51.60\n\n\n可以看到兩級網絡由於 Proposals 的存在，Regression 大部分在 error 圖中的谷地進行，所以提升較小，三者效果都很好。此外，對於小目標 APs，DIoU 的效果是最好的，說明對於小目標長寬比並不是特別重要。\n\nDIoU-NMS 的效果，使用不同的 NMS 閾值，使用 Loss CIoU 在 VOC 上訓練（即上表最後一行）。\n\ncomparison of DIoU-NMS and original NMS\n\n\n\nQuestions我有一個疑問，關於本文最前面的 reg 過程的描述中，有一步是將 Anchors/Proposals 加上預測出的 reg 值之後，與 GT 進行匹配，方法是計算出一個 Anchors/Proposals 與所有 GT 的最大 IoU 值，如果這個最大值大於一個設定的閾值（e.g 0.7），那麼這個 Anchors/Proposals 為正樣本，且有最大 IoU 值的那個 GT 為匹配上的 GT。\n問題在於，只有正樣本會有 reg loss，而負樣本沒有 reg loss。在 GIoU 和 DIoU 的文中，作者都提到了他們的一個好處是，當兩個 box 之間的 IoU 為零時，GIoU/DIoU 仍然能提供 reg 的梯度而使用普通的 IoU 不能。但是實際過程中，如果 IoU 為零的話，那這個 box 一定是負樣本，就根本沒有 reg loss。\n就這個問題我 問了作者，然後我發現我確實忽略了一點，就是在 YOLO 系列中有不同的匹配方式。YOLO 中，中心點落在某一個 Grid 裡，那麼這個 Grid 負責預測這個物體，且 Grid 中的一個 IoU 最大的 Predictor 負責預測。由於總要分配一個 Predictor 預測一個 box，所以這個 IoU 並沒有限制，也就可以為零。\n但是話說回來，我覺得這種情況會非常罕見。在 YOLOv2 引入 Anchors 之後，由於默認的 Anchors 面積總是大於 Grid，所以不可能出現中心點落在這個 Grid 內的 box 與 Anchors 的 IoU 為零。在 YOLOv1 中，只有初始值恰好使一個 Grid 內所有（兩個）Predictor 預測的 box 的長寬都很小，且對應 GT 的長寬也很小，且他們中心點在這個 Grid 內也足夠遠（大於 (w(GT)+w(Anchor)) / 2, (h(GT)+h(Anchor)) / 2）才有可能出現這種情況。\n其實我還有一個疑問，關於具體代碼的，我感覺裡面 Smooth-L1 loss 不是加在回歸值而是 bbox 坐標上的，這個可能需要跑一下代碼才知道。。\n","dateCreated":"2020-05-20T00:00:00+08:00","dateModified":"2021-05-24T01:28:51+08:00","datePublished":"2020-05-20T00:00:00+08:00","description":"目標檢測中關於回歸（reg）的兩個指標的改進。一個是 NMS 中作為依據的 cls 分数，另一個是不直接反應 IoU 的 SmoothL1 損失值。","headline":"目標檢測中定位準確性的改進方法","image":[],"mainEntityOfPage":{"@type":"WebPage","@id":"https://tangh.github.io/articles/improvements-of-regressor-in-detector/"},"publisher":{"@type":"Organization","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg","logo":{"@type":"ImageObject","url":"icon.jpg"}},"url":"https://tangh.github.io/articles/improvements-of-regressor-in-detector/","keywords":"Computer Vision, Deep Learning, Object Detection"}</script>
+    <meta name="description" content="目標檢測中關於回歸（reg）的兩個指標的改進。一個是 NMS 中作為依據的 cls 分数，另一個是不直接反應 IoU 的 SmoothL1 損失值。">
+<meta property="og:type" content="blog">
+<meta property="og:title" content="目標檢測中定位準確性的改進方法">
+<meta property="og:url" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;articles&#x2F;improvements-of-regressor-in-detector&#x2F;">
+<meta property="og:site_name" content="雨天等放晴">
+<meta property="og:description" content="目標檢測中關於回歸（reg）的兩個指標的改進。一個是 NMS 中作為依據的 cls 分数，另一個是不直接反應 IoU 的 SmoothL1 損失值。">
+<meta property="og:locale" content="en_US">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;regression-cls-unmatch-iou.jpg">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;regression-iou-with-metrics.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;regression-number-of-boxes.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;regression-non-monotonic-localization.jpg">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;regression-iters-vs-ap.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;regression-iou-net.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;regression-roi-pooling.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;regression-iou-net.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;regression-giou-surrogate-losses.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;regression-giou-iou-correlation.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;regression-diou-giou-compare.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;regression-giou-degrades-to-iou.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;regression-diou-simulation.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;regression-visualization-of-reg-errors.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;regression-diou-nms.png">
+<meta property="article:published_time" content="2020-05-19T16:00:00.000Z">
+<meta property="article:modified_time" content="2021-05-23T17:28:51.053Z">
+<meta property="article:author" content="Tang Huan">
+<meta property="article:tag" content="IoU-Net">
+<meta property="article:tag" content="GIoU">
+<meta property="article:tag" content="DIoU">
+<meta property="article:tag" content="CIoU">
+<meta property="article:tag" content="Regressor">
+<meta property="article:tag" content="Object Detection">
+<meta property="article:tag" content="目标检测">
+<meta property="article:tag" content="目標檢測">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;regression-cls-unmatch-iou.jpg">
+    
+    
+        
+    
+    
+        <meta property="og:image" content="https://tangh.github.io/assets/images/icon.jpg"/>
+    
+    
+    
+    
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
+    <!--STYLES-->
+    
+<link rel="stylesheet" href="/assets/css/style-iaetwm81hfopcuajcp7qnh2zsnqn4dhiu3nftuj79wdhe7fie6l4r0thrs6g.min.css">
+
+    <!--STYLES END-->
+    
+    <script async src="https://www.googletagmanager.com/gtag/js?id=UA-137837052-1"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'UA-137837052-1');
+    </script><!-- hexo-inject:begin --><!-- hexo-inject:end -->
+
+
+    
+
+</head>
+
+    <body>
+        <!-- hexo-inject:begin --><!-- hexo-inject:end --><div id="blog">
+            <!-- Define author's picture -->
+
+
+    
+        
+            
+        
+    
+
+<header id="header" data-behavior="4">
+    <i id="btn-open-sidebar" class="fa fa-lg fa-bars"></i>
+    <div class="header-title">
+        <a
+            class="header-title-link"
+            href="/"
+            aria-label=""
+        >
+            雨天等放晴
+        </a>
+    </div>
+    
+        
+            <a
+                class="header-right-picture "
+                href="#about"
+                aria-label="Open the link: /#about"
+            >
+        
+        
+            <img class="header-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+        </a>
+    
+</header>
+
+            <!-- Define author's picture -->
+
+
+
+        
+    
+
+<nav id="sidebar" data-behavior="4">
+    <div class="sidebar-container">
+        
+            <div class="sidebar-profile">
+                <a
+                    href="/#about"
+                    aria-label="Read more about the author"
+                >
+                    <img class="sidebar-profile-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+                </a>
+                <h4 class="sidebar-profile-name">Tang Huan</h4>
+                
+                    <h5 class="sidebar-profile-bio"></h5>
+                
+            </div>
+        
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/"
+                            
+                            rel="noopener"
+                            title="Home"
+                        >
+                        <i class="sidebar-button-icon fa fa-home" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Home</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-categories"
+                            
+                            rel="noopener"
+                            title="Categories"
+                        >
+                        <i class="sidebar-button-icon fa fa-bookmark" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Categories</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-tags"
+                            
+                            rel="noopener"
+                            title="Tags"
+                        >
+                        <i class="sidebar-button-icon fa fa-tags" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Tags</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-archives"
+                            
+                            rel="noopener"
+                            title="Archives"
+                        >
+                        <i class="sidebar-button-icon fa fa-archive" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Archives</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/about"
+                            
+                            rel="noopener"
+                            title="About"
+                        >
+                        <i class="sidebar-button-icon fas fa-cube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">About</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://twitter.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Twitter"
+                        >
+                        <i class="sidebar-button-icon fab fa-twitter" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Twitter</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.flickr.com/photos/135277712@N07/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Flickr"
+                        >
+                        <i class="sidebar-button-icon fab fa-flickr" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Flickr</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.instagram.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Instagram"
+                        >
+                        <i class="sidebar-button-icon fab fa-instagram" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Instagram</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="YouTube"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">YouTube</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://space.bilibili.com/634428/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="BiliBili"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube-square" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">BiliBili</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+    </div>
+</nav>
+
+            
+            <div id="main" data-behavior="4"
+                 class="
+                        hasCoverMetaIn
+                        ">
+                
+<article class="post">
+    
+    
+        <div class="post-header main-content-wrap text-center">
+    
+        <h1 class="post-title">
+            目標檢測中定位準確性的改進方法
+        </h1>
+    
+    
+        <div class="post-meta">
+    <time datetime="2020-05-20T00:00:00+08:00">
+	
+		    May 20, 2020
+    	
+    </time>
+    
+        <span>in </span>
+        
+    <a class="category-link" href="/categories/Computer-Science/">Computer Science</a>, <a class="category-link" href="/categories/Computer-Science/Deep-Learning/">Deep Learning</a>
+
+
+    
+</div>
+
+    
+</div>
+
+    
+    
+        <div class="post-content markdown">
+    
+        <div class="main-content-wrap">
+            <!-- excerpt -->
+
+<p>常見的 Detector 中，（除 YOLO 系列有些許不同之外），通常的做法是通過 CNN 得到一個框的類別置信度（<code>cls</code>）和回歸量（<code>reg</code>）。首先對所有的框應用 <code>reg</code>，然後去除掉所有 <code>cls</code> 分数小於設定閾值的，再對餘下的進行 NMS。NMS 的依據是高 <code>cls</code> 分数抑制低分数的。對於預測值的訓練，首先會對回歸後的框進行一次 GT 匹配，這樣就找到所有框和對應 GT 的真實偏差值 <code>reg&#39;</code>，計算 <code>reg&#39;</code> 和 <code>reg</code> 之間的 SmoothL1 Loss 值，反向傳播，即可得到更準確的 <code>reg</code>。</p>
+<p>這個過程中可以看出兩個影響「位置」準確的地方：第一個是 NMS 時，更高 cls 分数的框不代表它的位置更接近於 GT，而需要的偏移越小顯然越容易預測準確（從 YOLOv2 引入 Anchors 也可以看出）；第二個是 Smooth-L1 的值，不直接反應 IoU 的大小，即 SmoothL1 小不一定代表 IoU 更大。</p>
+<p>下面針對這兩個問題介紹幾篇文章。</p>
+<h1 id="table-of-contents">Table of Contents</h1><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#Acquisition-of-Localization-Confidence-for-Accurate-Object-Detection-ECCV-2018"><span class="toc-text">Acquisition of Localization Confidence for Accurate Object Detection (ECCV 2018)</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#Problems"><span class="toc-text">Problems</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#IoU-Net"><span class="toc-text">IoU-Net</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Loc-Conf-IoU-guided-NMS"><span class="toc-text">Loc Conf, IoU-guided NMS</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Refinement-as-an-optimization-procedure"><span class="toc-text">Refinement as an optimization procedure</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Precise-RoI-Pooling-PrRoI-Pooling"><span class="toc-text">Precise RoI Pooling (PrRoI Pooling)</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Training-Inference-and-Results"><span class="toc-text">Training, Inference and Results</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#Generalized-Intersection-over-Union-A-Metric-and-A-Loss-for-Bounding-Box-Regression-CVPR-2019"><span class="toc-text">Generalized Intersection over Union: A Metric and A Loss for Bounding Box Regression (CVPR 2019)</span></a></li><li class="toc-item toc-level-1"><a class="toc-link" href="#Distance-IoU-Loss-Faster-and-Better-Learning-for-Bounding-Box-Regression-AAAI-2020"><span class="toc-text">Distance-IoU Loss: Faster and Better Learning for Bounding Box Regression (AAAI 2020)</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#Simulation-Experiment"><span class="toc-text">Simulation Experiment</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Distance-IoU-and-Complete-IoU"><span class="toc-text">Distance-IoU and Complete-IoU</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#NMS-using-DIoU"><span class="toc-text">NMS using DIoU</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Results"><span class="toc-text">Results</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#Questions"><span class="toc-text">Questions</span></a></li></ol>
+
+
+
+<h1 id="Acquisition-of-Localization-Confidence-for-Accurate-Object-Detection-ECCV-2018"><a href="#Acquisition-of-Localization-Confidence-for-Accurate-Object-Detection-ECCV-2018" class="headerlink" title="Acquisition of Localization Confidence for Accurate Object Detection (ECCV 2018)"></a>Acquisition of Localization Confidence for Accurate Object Detection (ECCV 2018)</h1><h2 id="Problems"><a href="#Problems" class="headerlink" title="Problems"></a>Problems</h2><p>上述第一個問題，帶來兩個後果：</p>
+<ol>
+<li>如下圖（1），<code>cls</code> 高的不代表定位更準確（黃色為 GT），所以需要得到一個與位置直接相關的指標在 NMS 中使用，這個指標最好就是 IoU 預測值。作者提出了 Loc Conf 即預測某一個 box 和對應 GT 之間當前的 IoU，具體見下文。</li>
+</ol>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-cls-unmatch-iou.jpg" target="_blank" rel="noopener" title="(1) misalignment between classification confidence and localization accuracy" data-caption="(1) misalignment between classification confidence and localization accuracy" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-cls-unmatch-iou.jpg" alt="(1) misalignment between classification confidence and localization accuracy"></a><span class="caption">(1) misalignment between classification confidence and localization accuracy</span></div><div style="clear:both;"></div>
+
+<p>  圖（2）表示 NMS 之前，一個 box 與其匹配到的 GT 之間的 IoU，與 Cls Conf（左）和 Loc Conf（右）之間的相關性。同樣可以看出，Cls Conf 與 IoU 之間的相關性較小。Pearson correlation coefficients 分別為 <code>0.217; 0.617</code>。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-iou-with-metrics.png" target="_blank" rel="noopener" title="(2) correlation between the IoU and classification/localization confidence" data-caption="(2) correlation between the IoU and classification/localization confidence" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-iou-with-metrics.png" alt="(2) correlation between the IoU and classification/localization confidence"></a><span class="caption">(2) correlation between the IoU and classification/localization confidence</span></div><div style="clear:both;"></div>
+
+<p>  圖（3）表示 NMS 之後剩下的正樣本 box 的数量，與（其匹配到的 GT 之間的※）IoU 之間的關係。No-NMS 表示 NMS 之前的数量，也就是這個 IoU 範圍下最多的 box 数量。圖中可以看出，以 Loc Conf 作為指標，NMS 留下的 box 中 IoU 大的数量增多，小的数量減少（總数量接近）。</p>
+<p>  <em>※如果一個 GT 匹配到了多個預測 box，那麼只有與其 IoU 最高的被計作正樣本</em></p>
+<div class="figure center" style="width:75%;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-number-of-boxes.png" target="_blank" rel="noopener" title="(3) number of positive bounding boxes after NMS" data-caption="(3) number of positive bounding boxes after NMS" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-number-of-boxes.png" style="width:75%;"alt="(3) number of positive bounding boxes after NMS"></a><span class="caption">(3) number of positive bounding boxes after NMS</span></div><div style="clear:both;"></div>
+
+<ol start="2">
+<li><p>以 <code>cls</code> 為指標，會使得回歸過程難以解釋。如下圖（4），由於缺少反應位置準確程度的預測，如果直接簡單地多次進行回歸（Regression-Based, Recursive/Cascade），位置反而會偏移更大。除了新的指標之外還需要探究一下使得 IoU 隨著迭代次数單調增加的方法。</p>
+<p>回歸過程可以用以下公式描述：<br>$$<br>c^* = \text{argmin}_{c} \ crit(\text{transform}(box_\text{det},\ c), box_\text{gt})<br>$$</p>
+<p>Regression-Based 的方法即直接估計最佳的 <code>c*</code> 然後應用変換，作者提出了 Optimization-Based 的回歸方法，具體見下文。</p>
+</li>
+</ol>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-non-monotonic-localization.jpg" target="_blank" rel="noopener" title="(4) non-monotonic localization" data-caption="(4) non-monotonic localization" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-non-monotonic-localization.jpg" alt="(4) non-monotonic localization"></a><span class="caption">(4) non-monotonic localization</span></div><div style="clear:both;"></div>
+
+<p>  圖（5）是 Optimization-Based 和 Regression-Based 的方法隨著迭代次数的增加 AP 的変化。對於 FPN，<code>iter = 0</code> 代表 RPN，<code>iter = 1</code> 表示的是 Head；對於 Cascade R-CNN，<code>iter = 0, 1, 2</code> 分別表示其 1st, 2nd and 3rd regression stages (H1, H2, H3)。可以看出，隨著迭代次数增加到一定程度後，AP 值在 Regression-Based 的方法中會下降。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-iters-vs-ap.png" target="_blank" rel="noopener" title="(5) AP drop in regression-based methods" data-caption="(5) AP drop in regression-based methods" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-iters-vs-ap.png" alt="(5) AP drop in regression-based methods"></a><span class="caption">(5) AP drop in regression-based methods</span></div><div style="clear:both;"></div>
+
+
+<h2 id="IoU-Net"><a href="#IoU-Net" class="headerlink" title="IoU-Net"></a>IoU-Net</h2><p>為解決上述兩個問題，作者提出了以 Loc Conf 為指標的 Optimization-Based 的網絡，稱作 IoU-Net。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-iou-net.png" target="_blank" rel="noopener" title="architecture of proposed IoU-Net" data-caption="architecture of proposed IoU-Net" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-iou-net.png" alt="architecture of proposed IoU-Net"></a><span class="caption">architecture of proposed IoU-Net</span></div><div style="clear:both;"></div>
+
+<p>網絡主要多出一支平行的 class-aware IoU 預測，有了這個分支，就可以得到一個 box 的 IoU（與匹配的 GT 之間的），這就跟得到 cls 分数是一樣的原理和操作。此外將 RoIAlign 換成了 PrRoI Pooling。Jittered RoIs 是訓練時需要用到的。</p>
+<h2 id="Loc-Conf-IoU-guided-NMS"><a href="#Loc-Conf-IoU-guided-NMS" class="headerlink" title="Loc Conf, IoU-guided NMS"></a>Loc Conf, IoU-guided NMS</h2><p>按照上面的新分支，得到了 IoU 的預測值後，可以通過下面的算法進行 IoU-guided NMS。</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line">Algorithm 1: IoU-guided NMS.</span><br><span class="line">Classification confidence and localization confidence are disentangled in the algorithm.</span><br><span class="line">We use the localization confidence (the predicted IoU) to rank all detected bounding boxes,</span><br><span class="line">and update the classification confidence based on a clustering-like rule.</span><br><span class="line">&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;</span><br><span class="line">Input: B &#x3D; &#123;b1, ..., bn&#125;, S, I, Ωnms</span><br><span class="line">B is a set of detected bounding boxes.</span><br><span class="line">S and I are functions (neural networks) mapping bounding boxes to</span><br><span class="line">their classification confidence and IoU estimation (localization confidence) respectively.</span><br><span class="line">Ωnms is the NMS threshold.</span><br><span class="line"></span><br><span class="line">Output: D, the set of detected bounding boxes with classification scores.</span><br><span class="line">&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;</span><br><span class="line">1:  D ← ∅</span><br><span class="line">2:  WHILE B !&#x3D; ∅ DO:</span><br><span class="line">3:      bm ← argmax I(bj)</span><br><span class="line">4:      B ← B \ &#123;bm&#125;</span><br><span class="line">5:      s ← S(bm)</span><br><span class="line">6:      FOR bj ∈ B DO:</span><br><span class="line">7:          IF IoU(bm,bj) &gt; Ωnms THEN:</span><br><span class="line">8:              s ← max(s,S(bj))</span><br><span class="line">9:              B ← B \ &#123;bj&#125;</span><br><span class="line">10:         END IF</span><br><span class="line">11:     END FOR</span><br><span class="line">12:     D ← D ∪ &#123;⟨bm, s⟩&#125;</span><br><span class="line">13: END WHILE</span><br><span class="line">14: RETURN D</span><br></pre></td></tr></table></figure>
+
+<p>主要的改動在 <code>line3, line8</code>，使用 <code>IoU</code> 代替 <code>cls</code> 作為排序指標，並且，對於一系列對於同一個物體的重複預測，留下的 box 的 <code>cls</code> 會取這一系列中最大值。</p>
+<h2 id="Refinement-as-an-optimization-procedure"><a href="#Refinement-as-an-optimization-procedure" class="headerlink" title="Refinement as an optimization procedure"></a>Refinement as an optimization procedure</h2><p>這裡是一種與之前不同的更新 box 坐標的方法：</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line">Algorithm 2: Optimization-based bounding box refinement.</span><br><span class="line">&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;</span><br><span class="line">Input: B &#x3D; &#123;b1, ..., bn&#125;, F, T&#x3D;5, λ&#x3D;0.5, Ω1&#x3D;0.001, Ω2&#x3D;-0.01</span><br><span class="line">B is a set of detected bounding boxes, in the form of (x0, y0, x1, y1).</span><br><span class="line">F is the feature map of the input image.</span><br><span class="line">T is number of steps. λ is the step size, and Ω1 is an early-stop threshold,</span><br><span class="line">and Ω2 &lt; 0 is an localization degeneration tolerance.</span><br><span class="line">Function PrPool extracts the feature representation for a given bounding box,</span><br><span class="line">and function IoU denotes the estimation of IoU by the IoU-Net.</span><br><span class="line"></span><br><span class="line">Output: The set of final detection bounding boxes.</span><br><span class="line">&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;</span><br><span class="line">1:  A ← ∅</span><br><span class="line">2:  FOR i&#x3D;1 to T DO:</span><br><span class="line">3:      FOR bj ∈ B and bj !∈ A DO:</span><br><span class="line">4:          grad ← ∇bj&#123; IoU(PrPool(F, bj)) &#125;</span><br><span class="line">5:          PrevScore ← IoU(PrPool(F, bj))</span><br><span class="line">6:          bj ← bj + λ * scale(grad,bj)</span><br><span class="line">7:          NewScore ← IoU(PrPool(F, bj))</span><br><span class="line">8:          IF |PrevScore − NewScore| &lt; Ω1 or NewScore − PrevScore &lt; Ω2 THEN:</span><br><span class="line">9:              A ← A ∪ &#123;bj&#125;</span><br><span class="line">10:         END IF</span><br><span class="line">11:     END FOR</span><br><span class="line">12: END FOR</span><br><span class="line">13: RETURN B</span><br></pre></td></tr></table></figure>
+
+<p><code>line4</code> 表示計算 通過 PrPool 採樣之後再通過 IoU 分支得到的 <code>IoU</code>，計算關於 <code>box{bj}</code> 四個坐標的梯度。<code>line6</code> 是更新坐標的核心，<code>scale()</code> 是進行對之前得到的 <code>grad{x0, y0, x1, y1}</code> 進行一次調整，依據是所在的軸，例如對 <code>∇x</code> 則在梯度上乘以 <code>width(bj)</code>。注意第一次仍需要通過網絡得到的 <code>B-B-Reg</code> 進行一次通常的 Reg-Based 回歸。</p>
+<h2 id="Precise-RoI-Pooling-PrRoI-Pooling"><a href="#Precise-RoI-Pooling-PrRoI-Pooling" class="headerlink" title="Precise RoI Pooling (PrRoI Pooling)"></a>Precise RoI Pooling (PrRoI Pooling)</h2><p>RoIPooling 和 RoIAlign 在這裡的主要問題是它對於 box 的坐標不連續可導（box 的坐標不一定為整数），使用上面的新回歸方法相當於在 Pooling 层中需要額外計算一個對參数的梯度了（普通的 Pooling 层和 RoIPooling/RoIAlign 是不含參数的），所以作者提出了 PrRoI Pooling。</p>
+<p>首先，需要得到一個連續取值的 feature map <code>f(x,y)</code>：</p>
+<p>$$<br>f(x, y) = \sum_{i, j} max(0, \ 1-|x-i|) \times max(0,\ 1-|y-j|) \ \times \ w_{i, j}<br>$$</p>
+<p>然後可以通過積分除以面積得到 Pooling 值：</p>
+<p>$$<br>\text{PrPool} (bin ,\ \mathcal{F}) = \frac{\int_{y_1}^{y_2} \int_{x_1}^{x_2} f(x, y) \ dxdy}{(x_2 - x_1) \times (y_2 - y_1)}<br>$$</p>
+<p>這樣，對任意一點的導数為（以 <code>x1</code> 為例）：</p>
+<p>$$<br>\frac{\partial \text{PrPool} (bin, \mathcal{F})}{\partial x_1} = \frac{\text{PrPool}(bin, \mathcal{F})}{x_2 - x_1} - \frac{\int_{y_1}^{y_2} f(x_1, y) dy}{(x_2 - x_1) \times (y_2 -y_1)}<br>$$</p>
+<p>下圖是三種 RoI Pooling 的對比。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-roi-pooling.png" target="_blank" rel="noopener" title="RoI Pooling, RoI Align and PrRoI Pooling" data-caption="RoI Pooling, RoI Align and PrRoI Pooling" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-roi-pooling.png" alt="RoI Pooling, RoI Align and PrRoI Pooling"></a><span class="caption">RoI Pooling, RoI Align and PrRoI Pooling</span></div><div style="clear:both;"></div>
+
+
+<h2 id="Training-Inference-and-Results"><a href="#Training-Inference-and-Results" class="headerlink" title="Training, Inference and Results"></a>Training, Inference and Results</h2><p>訓練是 e2e 的，只是對於 IoU 分支，訓練使用的是通過 GT augmenting 得到的 Jittered RoIs，而不是 RPN 得到的 RoIs。生成方式是通過一些隨機參数從 GT 変換出一系列 box，然後去除與匹配到的 GT 之間的 IoU 小於 <code>0.5</code> 的，並且根據不同的 IoU 均勻地採樣。損失函数使用 Smooth-L1。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-iou-net.png" target="_blank" rel="noopener" title="architecture of proposed IoU-Net" data-caption="architecture of proposed IoU-Net" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-iou-net.png" alt="architecture of proposed IoU-Net"></a><span class="caption">architecture of proposed IoU-Net</span></div><div style="clear:both;"></div>
+
+<p>預測時，首先通過一般的結構部分得到 <code>cls</code> 和 <code>reg</code>，然後進行一次正常的回歸，然後進行 IoU-guided NMS，剩下的 box 中 <code>cls</code> 分数前 100 的將使用 optimization-based regression 進行進一步地 regression。</p>
+<p>簡略的實驗（單項增加 Soft-NMS/IoU-NMS/Refine）結果如下表（COCO trainval35k 訓練，minival5k 測試）：</p>
+<table>
+<thead>
+<tr>
+<th align="center">Method</th>
+<th align="center">Baseline</th>
+<th align="center">+Soft-NMS</th>
+<th align="center">+IoU-NMS</th>
+<th align="center">+Refine</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="center">FPN</td>
+<td align="center">36.4</td>
+<td align="center">36.8</td>
+<td align="center">37.3</td>
+<td align="center">38.0</td>
+</tr>
+<tr>
+<td align="center">Cascade R-CNN</td>
+<td align="center">40.6</td>
+<td align="center">40.9</td>
+<td align="center">40.7</td>
+<td align="center">41.4</td>
+</tr>
+<tr>
+<td align="center">Mask R-CNN</td>
+<td align="center">37.5</td>
+<td align="center">37.9</td>
+<td align="center">38.1</td>
+<td align="center">39.2</td>
+</tr>
+</tbody></table>
+<p>聯合訓練後的最終結果為 ResNet-50：<code>38.1</code>，ResNet-101：<code>40.6</code>。</p>
+<h1 id="Generalized-Intersection-over-Union-A-Metric-and-A-Loss-for-Bounding-Box-Regression-CVPR-2019"><a href="#Generalized-Intersection-over-Union-A-Metric-and-A-Loss-for-Bounding-Box-Regression-CVPR-2019" class="headerlink" title="Generalized Intersection over Union: A Metric and A Loss for Bounding Box Regression (CVPR 2019)"></a>Generalized Intersection over Union: A Metric and A Loss for Bounding Box Regression (CVPR 2019)</h1><p>開頭的第二個問題，從下面的圖中可以看出。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-giou-surrogate-losses.png" target="_blank" rel="noopener" title="different iou but same norm distance (a)L2 (b)L1" data-caption="different iou but same norm distance (a)L2 (b)L1" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-giou-surrogate-losses.png" alt="different iou but same norm distance (a)L2 (b)L1"></a><span class="caption">different iou but same norm distance (a)L2 (b)L1</span></div><div style="clear:both;"></div>
+
+<p>圖中黑色的框為預測的，綠色的為 GT。圖（a）是以 L2-norm 為距離指標，假設框是 xyxy 形式的。如果預測和 GT 的一個角（左下）之間的距離是固定的，那麼如果預測的 box 的對角，在一個以 GT 對角為圓心的圓周上，那麼所有預測框都會有相同的 L2 距離，但是他們的 IoU 卻有很大差別。圖（b）是以 L1-norm 為距離指標的三種情況。</p>
+<p>此外，IoU 被設計成 scale invariant，而 l-norm 不是。所以有相同 IoU 的不同尺寸的 box 得到的 loss 也會不同。</p>
+<p>直接使用 IoU 的問題：如果兩個框完全不相交，那麼 <code>Iou = 0</code>，不能反應他們之間的距離，所以提出 Generalized IoU，计算方式如下：</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">Algorithm 1: Generalized Intersection over Union.</span><br><span class="line">&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;</span><br><span class="line">input: Two arbitrary convex shapes: A, B ⊆ S ∈ R^n</span><br><span class="line">output: GIoU</span><br><span class="line">&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;</span><br><span class="line">1: For A and B, find the smallest enclosing convex object C, where C ⊆ S ∈ R^n (same shape and dimensions)</span><br><span class="line">2: IoU &#x3D; |A∩B| ÷ |A∪B|</span><br><span class="line">3: GIoU &#x3D; IoU − |C\(A∪B)| ÷ |C|</span><br></pre></td></tr></table></figure>
+
+<p><code>line1</code> 裡 <code>C ⊆ S</code> 即相同的空間和形狀，如果原來是橢圓，則 C 也用橢圓包圍。原來是矩形 box，那麼 C 也是矩形。</p>
+<p>GIoU 具有以下特性，所以可以作為 IoU 的一種替代：</p>
+<ol>
+<li><p>與 IoU 相同，GIoU 作為距離時（例如 <code>Loss(GIoU) = 1 - GIoU</code>），包含作為度量的所有属性，例如非負性，對稱性等；</p>
+</li>
+<li><p>與 IoU 相同，GIoU 同樣具有尺度不変性；</p>
+</li>
+<li><p>GIoU 總是 IoU 的下界，即同樣的兩個框計算出的 <code>GIoU(A,B) &lt;= IoU(A,B)</code>，且 AB 形狀越相似距離越接近， GIoU 越接近於 IoU。所以 GIoU 是與 IoU 有強相關性的（特別是 IoU 較高時），下圖是隨機取 10K 個 box 計算得到的相關性圖；</p>
+</li>
+<li><p>GIoU 具有對稱的範圍：<code>-1 &lt;= GIoU(A,B) &lt;= 1</code>。</p>
+</li>
+</ol>
+<div class="figure center" style="width:75%;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-giou-iou-correlation.png" target="_blank" rel="noopener" title="correlation between GIoU and IOU" data-caption="correlation between GIoU and IOU" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-giou-iou-correlation.png" style="width:75%;"alt="correlation between GIoU and IOU"></a><span class="caption">correlation between GIoU and IOU</span></div><div style="clear:both;"></div>
+
+<p>上述特性使得使用 GIoU 作為 Loss 是一種理想的選擇。對於一些奇特的形狀，可能有些地方的導数需要單獨再看看，但是對於 2D Detection，所有的 box 的兩軸都是平行的，所以計算 IoU 和 GIoU 只需要用到 <code>min, max</code> 和一些 piece-wise linear 的函数，他們都是可導的（Algorithm 1 中每一步都可導），所以可直接用作為損失函数 <code>Loss(GIoU) = 1 - GIoU</code>。對於 IoU，在所有沒有交疊的情況都是沒有梯度的，而 GIoU 對於任何情況都有梯度。</p>
+<p>對於 <code>IoU &gt; 0</code> 的情況，<code>Loss(GIoU) = 1 - GIoU</code> 顯然鼓勵 IoU 增大。對於 <code>IoU = 0</code> 的情況，<br>$$<br>\begin{aligned}<br>\mathcal{L}_{IoU} = 1 - GIoU &amp;= 1 + \frac{Area(C) - Union(A, B)}{Area(C)} - IoU \\<br>&amp;= 2 - \frac{Union(A, B)}{Area(C)}<br>\end{aligned}<br>$$</p>
+<p>損失函数在鼓勵 \( 0 \leq \frac{Union(A, B)}{Area(C)} \leq 1 \) 增大，而這一項的增大需要 B<sup>p</sup> 和 B<sup>g</sup> 逐漸靠近，使得 <code>IoU ≠ 0</code>。</p>
+<p>簡略的實驗結果如下表（COCO trainval35k 訓練，minival5k 測試）。</p>
+<p>Mask R-CNN with ResNet-50：</p>
+<table>
+<thead>
+<tr>
+<th align="center">Loss</th>
+<th align="center">AP (IoU[.5 : .95])</th>
+<th align="center">AP (GIoU[.5 : .95])</th>
+<th align="center">AP75 (IoU)</th>
+<th align="center">AP75 (GIoU)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="center">Smooth-L1 (Original)</td>
+<td align="center">0.366</td>
+<td align="center">0.356</td>
+<td align="center">0.397</td>
+<td align="center">0.385</td>
+</tr>
+<tr>
+<td align="center">Loss IoU</td>
+<td align="center">0.374</td>
+<td align="center">0.364</td>
+<td align="center">0.404</td>
+<td align="center">0.393</td>
+</tr>
+<tr>
+<td align="center">Loss GIoU</td>
+<td align="center"><b>0.376</b></td>
+<td align="center"><b>0.366</b></td>
+<td align="center"><b>0.405</b></td>
+<td align="center"><b>0.395</b></td>
+</tr>
+</tbody></table>
+<p>YOLOv3 with Darknet-608:</p>
+<table>
+<thead>
+<tr>
+<th align="center">Loss</th>
+<th align="center">AP (IoU[.5 : .95])</th>
+<th align="center">AP (GIoU[.5 : .95])</th>
+<th align="center">AP75 (IoU)</th>
+<th align="center">AP75 (GIoU)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="center">MSE (Original)</td>
+<td align="center">0.314</td>
+<td align="center">0.302</td>
+<td align="center">0.329</td>
+<td align="center">0.317</td>
+</tr>
+<tr>
+<td align="center">Loss IoU</td>
+<td align="center">0.322</td>
+<td align="center">0.313</td>
+<td align="center">0.345</td>
+<td align="center">0.335</td>
+</tr>
+<tr>
+<td align="center">Loss GIoU</td>
+<td align="center"><b>0.335</b></td>
+<td align="center"><b>0.325</b></td>
+<td align="center"><b>0.359</b></td>
+<td align="center"><b>0.348</b></td>
+</tr>
+</tbody></table>
+<p>可以看到對於 YOLO 這類位置準確度本來就較差的算法提升更加顯著。</p>
+<h1 id="Distance-IoU-Loss-Faster-and-Better-Learning-for-Bounding-Box-Regression-AAAI-2020"><a href="#Distance-IoU-Loss-Faster-and-Better-Learning-for-Bounding-Box-Regression-AAAI-2020" class="headerlink" title="Distance-IoU Loss: Faster and Better Learning for Bounding Box Regression (AAAI 2020)"></a>Distance-IoU Loss: Faster and Better Learning for Bounding Box Regression (AAAI 2020)</h1><p>GIoU 嚴重依賴 IoU 項，它們的問題主要是收斂緩慢，回歸不精確。</p>
+<ul>
+<li>GIoU 會使得 box 先增大，使得有交疊出現，然後最大化交疊面積。</li>
+</ul>
+<div class="figure center" style="width:75%;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-diou-giou-compare.png" target="_blank" rel="noopener" title="Compare GIoU (first row) with DIoU (second row). GREEN: target, BLACK: anchor" data-caption="Compare GIoU (first row) with DIoU (second row). GREEN: target, BLACK: anchor" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-diou-giou-compare.png" style="width:75%;"alt="Compare GIoU (first row) with DIoU (second row). GREEN: target, BLACK: anchor"></a><span class="caption">Compare GIoU (first row) with DIoU (second row). GREEN: target, BLACK: anchor</span></div><div style="clear:both;"></div>
+
+<ul>
+<li>對於一個 box 包含另一個 box 的情況，GIoU 和 IoU 是相等的。</li>
+</ul>
+<div class="figure center" style="width:75%;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-giou-degrades-to-iou.png" target="_blank" rel="noopener" title="GIoU loss degrades to IoU loss for these cases" data-caption="GIoU loss degrades to IoU loss for these cases" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-giou-degrades-to-iou.png" style="width:75%;"alt="GIoU loss degrades to IoU loss for these cases"></a><span class="caption">GIoU loss degrades to IoU loss for these cases</span></div><div style="clear:both;"></div>
+
+<p>Distance-IoU DIoU，引入 normalize 後的中心點距離，直接減少這個距離，使得收斂加快和精確。Complete-IoU CIoU，考慮交疊面積、中心點距離和長寬比。此外，不僅可用作 Loss，DIoU 還可以用在 NMS，即同時考慮交疊面積比和中心點距離，使得遮擋的情況下的錯誤減少。</p>
+<h2 id="Simulation-Experiment"><a href="#Simulation-Experiment" class="headerlink" title="Simulation Experiment"></a>Simulation Experiment</h2><p>使用模擬實驗來驗證有效性，共有七個不同長寬比（<code>1:4, 1:3, ... , 4:1</code>）的單位面積的 target boxes（綠色），中心固定在 <code>(10, 10)</code>。在半徑為 <code>3</code> 的面積內隨機選擇 5000 個點放置 Anchors，每組 Anchors 有七種不同的面積（<code>0.5, 0.67, 0.75, 1, 1.33, 1.5 and 2</code>）+ 長寬比（<code>1:4, 1:3, ... , 4:1</code>）組合，所以共 <code>5000 × 7 × 7</code> 個 Anchors。</p>
+<p>應用梯度下降可以更新 Anchors 的位置：<br>$$<br>B_i^t = B_i^{t-1} + \eta (2 - IoU_i^{t-1}) ∇ B_i^{t-1}<br>$$</p>
+<p>其中 <code>η</code> 是 step，<code>2 - IoU</code> 是加速回歸的項，performance (error) 使用 <code>l1-norm</code> 表示。實驗結果如下圖。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-diou-simulation.png" target="_blank" rel="noopener" title="reg simulation experiments" data-caption="reg simulation experiments" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-diou-simulation.png" alt="reg simulation experiments"></a><span class="caption">reg simulation experiments</span></div><div style="clear:both;"></div>
+
+<p>下面的圖是在 final iteration T 的 error 可視化，坐標與上圖相同。可以看到 IoU Loss 在非交疊的情況下 error 都較大（由於 <code>∇B ≡ 0</code> 所以 box 不會移動）。而 GIoU Loss 谷地較大表示其有效區域更大，但在水平和垂直方向上 error 較大（<code>C − A ∪ B</code> 在這兩個方向通常較小或為零，GIoU 退化為 IoU）。而 DIoU Loss 在各處的 error 都較小。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-visualization-of-reg-errors.png" target="_blank" rel="noopener" title="visualization of regression errors of IoU, GIoU and DIoU losses" data-caption="visualization of regression errors of IoU, GIoU and DIoU losses" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-visualization-of-reg-errors.png" alt="visualization of regression errors of IoU, GIoU and DIoU losses"></a><span class="caption">visualization of regression errors of IoU, GIoU and DIoU losses</span></div><div style="clear:both;"></div>
+
+
+<h2 id="Distance-IoU-and-Complete-IoU"><a href="#Distance-IoU-and-Complete-IoU" class="headerlink" title="Distance-IoU and Complete-IoU"></a>Distance-IoU and Complete-IoU</h2><p>DIoU 直接減少兩個 box 中心點之間的距離：<br>$$<br>\mathcal{L}_{DIoU} = 1 - IoU + \mathcal{R}_{DIoU}<br>= 1 - IoU + \frac{\rho^2 (\text{b}, \text{b}^{gt})}{c^2}<br>$$</p>
+<p>其中 <code>b</code> 和 <code>b^gt</code> 表示兩個中心點，<code>ρ</code> 表示 Euclidean distance，<code>c</code> 表示 smallest enclosing box 的對角線長度。</p>
+<p>DIoU 同樣有與 GIoU 類似的特點：</p>
+<ul>
+<li><p>scale invariant</p>
+</li>
+<li><p>provide moving directions non-overlapping boxes</p>
+</li>
+<li><p>完全重合： <code>L{IoU} = L{GIoU} = L{DIoU} = 0</code>；相隔無限遠：<code>L{GIoU} = L{DIoU} → 2</code></p>
+</li>
+</ul>
+<p>同時 DIoU 的額外優點是：直接 minimize 距離，收斂快。即使在包含、在水平垂直方向時，收斂都非常快。</p>
+<p>在此基礎上，提出 CIoU，使得回歸過程更精確和迅速。CIoU 在 DIoU 的基礎上多了一項保持長寬比一致的項：</p>
+<p>$$<br>\mathcal{L}_{CIoU} = 1 - IoU + \mathcal{R}_{CIoU}<br>= 1 - IoU + \mathcal{R}_{DIoU} + \alpha v<br>$$</p>
+<p>$$<br>\begin{aligned}<br>v &amp;= \frac{4}{\pi^2} (arctan \frac{w^{gt}}{h^{gt}} - arctan \frac{w}{h})^2 \\<br>\alpha &amp;= \frac{v}{(1 - IoU) + v}<br>\end{aligned}<br>$$</p>
+<p><code>α</code> 是正的 trade-off 項，<code>4 / pi^2</code> 使得長寬比損失限制在 <code>[0, 1]</code>。</p>
+<p>這裡有一點需要注意，對於 <code>v</code> 的導数</p>
+<p>$$<br>\frac{\partial v}{\partial w} = \frac{8}{\pi^2} (arctan \frac{w^{gt}}{h^{gt}} - arctan \frac{w}{h}) \ \times \ \frac{h}{w^2 + h^2}<br>$$</p>
+<p><code>∂h</code> 同理，只需替換最後一項的分子。w<sup>2</sup> + h<sup>2</sup> 通常是一個很小的数，這會導致梯度很大，所以求梯度值時分母直接用 <code>1</code> 替代，這樣梯度方向相同但是数值減小。</p>
+<h2 id="NMS-using-DIoU"><a href="#NMS-using-DIoU" class="headerlink" title="NMS using DIoU"></a>NMS using DIoU</h2><p>使用 DIoU 替換原始 NMS 中的 IoU，即 <code>IoU - R{DIoU}</code>。表示如果兩個 box 的中心點較遠，那麼它們可能表示兩個物體。</p>
+<h2 id="Results"><a href="#Results" class="headerlink" title="Results"></a>Results</h2><ol>
+<li>YOLOv3 (Darknet-608) 在 VOC 07+12 訓練，07 test 測試。</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th align="center">Loss</th>
+<th align="center">AP (IoU[.5 : .95])</th>
+<th align="center">AP (GIoU[.5 : .95])</th>
+<th align="center">AP75 (IoU)</th>
+<th align="center">AP75 (GIoU)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="center">Loss IoU</td>
+<td align="center">46.57</td>
+<td align="center">45.82</td>
+<td align="center">49.82</td>
+<td align="center">48.76</td>
+</tr>
+<tr>
+<td align="center">Loss GIoU</td>
+<td align="center">47.73</td>
+<td align="center">46.88</td>
+<td align="center">52.20</td>
+<td align="center">51.05</td>
+</tr>
+<tr>
+<td align="center">Loss DIoU</td>
+<td align="center">48.10</td>
+<td align="center">47.38</td>
+<td align="center">52.82</td>
+<td align="center">51.88</td>
+</tr>
+<tr>
+<td align="center">Loss CIoU</td>
+<td align="center">49.21</td>
+<td align="center">48.42</td>
+<td align="center">54.28</td>
+<td align="center">52.87</td>
+</tr>
+<tr>
+<td align="center">Loss CIoU with DIoU NMS</td>
+<td align="center">49.32</td>
+<td align="center">48.54</td>
+<td align="center">54.74</td>
+<td align="center">53.30</td>
+</tr>
+</tbody></table>
+<ol start="2">
+<li>Faster R-CNN 在 COCO 17 train 上訓練，在 17 val 上測試。</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th align="center">Loss</th>
+<th align="center">AP</th>
+<th align="center">AP75</th>
+<th align="center">APs</th>
+<th align="center">APm</th>
+<th align="center">APl</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="center">Loss IoU</td>
+<td align="center">37.93</td>
+<td align="center">40.79</td>
+<td align="center">21.58</td>
+<td align="center">40.82</td>
+<td align="center">50.14</td>
+</tr>
+<tr>
+<td align="center">Loss GIoU</td>
+<td align="center">38.02</td>
+<td align="center">41.11</td>
+<td align="center">21.45</td>
+<td align="center">41.06</td>
+<td align="center">50.21</td>
+</tr>
+<tr>
+<td align="center">Loss DIoU</td>
+<td align="center">38.09</td>
+<td align="center">41.11</td>
+<td align="center"><b>21.66</b></td>
+<td align="center">41.18</td>
+<td align="center">50.32</td>
+</tr>
+<tr>
+<td align="center">Loss CIoU</td>
+<td align="center"><b>38.65</b></td>
+<td align="center"><b>41.96</b></td>
+<td align="center">21.32</td>
+<td align="center"><b>41.83</b></td>
+<td align="center"><b>51.51</b></td>
+</tr>
+<tr>
+<td align="center">Loss CIoU with DIoU NMS</td>
+<td align="center"><b>38.71</b></td>
+<td align="center"><b>42.07</b></td>
+<td align="center">21.37</td>
+<td align="center"><b>41.93</b></td>
+<td align="center"><b>51.60</b></td>
+</tr>
+</tbody></table>
+<p>可以看到兩級網絡由於 Proposals 的存在，Regression 大部分在 error 圖中的谷地進行，所以提升較小，三者效果都很好。此外，對於小目標 <code>APs</code>，DIoU 的效果是最好的，說明對於小目標長寬比並不是特別重要。</p>
+<ol start="3">
+<li>DIoU-NMS 的效果，使用不同的 NMS 閾值，使用 Loss CIoU 在 VOC 上訓練（即上表最後一行）。</li>
+</ol>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-diou-nms.png" target="_blank" rel="noopener" title="comparison of DIoU-NMS and original NMS" data-caption="comparison of DIoU-NMS and original NMS" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/regression-diou-nms.png" alt="comparison of DIoU-NMS and original NMS"></a><span class="caption">comparison of DIoU-NMS and original NMS</span></div><div style="clear:both;"></div>
+
+
+
+<h1 id="Questions"><a href="#Questions" class="headerlink" title="Questions"></a>Questions</h1><p>我有一個疑問，關於本文最前面的 reg 過程的描述中，有一步是將 Anchors/Proposals 加上預測出的 reg 值之後，與 GT 進行匹配，方法是計算出一個 Anchors/Proposals 與所有 GT 的最大 IoU 值，如果這個最大值大於一個設定的閾值（e.g <code>0.7</code>），那麼這個 Anchors/Proposals 為正樣本，且有最大 IoU 值的那個 GT 為匹配上的 GT。</p>
+<p>問題在於，只有正樣本會有 reg loss，而負樣本沒有 reg loss。在 GIoU 和 DIoU 的文中，作者都提到了他們的一個好處是，當兩個 box 之間的 IoU 為零時，GIoU/DIoU 仍然能提供 reg 的梯度而使用普通的 IoU 不能。但是實際過程中，如果 IoU 為零的話，那這個 box 一定是負樣本，就根本沒有 reg loss。</p>
+<p>就這個問題我 <a href="https://github.com/Zzh-tju/DIoU-pytorch-detectron/issues/10" target="_blank" rel="noopener">問了作者</a>，然後我發現我確實忽略了一點，就是在 YOLO 系列中有不同的匹配方式。YOLO 中，中心點落在某一個 Grid 裡，那麼這個 Grid 負責預測這個物體，且 Grid 中的<strong>一個</strong> IoU 最大的 Predictor 負責預測。由於總要分配一個 Predictor 預測一個 box，所以這個 IoU 並沒有限制，也就可以為零。</p>
+<p>但是話說回來，我覺得這種情況會非常罕見。在 YOLOv2 引入 Anchors 之後，由於默認的 Anchors 面積總是大於 Grid，所以不可能出現中心點落在這個 Grid 內的 box 與 Anchors 的 IoU 為零。在 YOLOv1 中，只有初始值恰好使一個 Grid 內所有（兩個）Predictor 預測的 box 的長寬都很小，且對應 GT 的長寬也很小，且他們中心點在這個 Grid 內也足夠遠（大於 <code>(w(GT)+w(Anchor)) / 2, (h(GT)+h(Anchor)) / 2</code>）才有可能出現這種情況。</p>
+<p>其實我還有一個疑問，關於具體代碼的，我感覺裡面 Smooth-L1 loss 不是加在回歸值而是 bbox 坐標上的，這個可能需要跑一下代碼才知道。。</p>
+<br/>
+            
+
+
+        </div>
+    </div>
+    <div id="post-footer" class="post-footer main-content-wrap">
+        
+            <div class="post-footer-tags">
+                <span class="text-color-light text-small">TAGGED IN</span><br/>
+                
+    <a class="tag tag--primary tag--small t-link" href="/tags/Computer-Vision/" rel="tag">Computer Vision</a> <a class="tag tag--primary tag--small t-link" href="/tags/Deep-Learning/" rel="tag">Deep Learning</a> <a class="tag tag--primary tag--small t-link" href="/tags/Object-Detection/" rel="tag">Object Detection</a>
+
+            </div>
+        
+        
+            <div class="post-actions-wrap">
+    <nav>
+        <ul class="post-actions post-action-nav">
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/create-high-quality-live-photos/"
+                    data-tooltip="生成高質量的 Live Photo 的方法"
+                    aria-label="PREVIOUS: 生成高質量的 Live Photo 的方法"
+                >
+                    
+                        <i class="fa fa-angle-left" aria-hidden="true"></i>
+                        <span class="hide-xs hide-sm text-small icon-ml">PREVIOUS</span>
+                    </a>
+            </li>
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/efficientnet-and-efficientdet/"
+                    data-tooltip="EfficientNet 和 EfficientDet"
+                    aria-label="NEXT: EfficientNet 和 EfficientDet"
+                >
+                    
+                        <span class="hide-xs hide-sm text-small icon-mr">NEXT</span>
+                        <i class="fa fa-angle-right" aria-hidden="true"></i>
+                    </a>
+            </li>
+        </ul>
+    </nav>
+    <ul class="post-actions post-action-share">
+        <li class="post-action hide-lg hide-md hide-sm">
+            <a
+                class="post-action-btn btn btn--default btn-open-shareoptions"
+                href="#btn-open-shareoptions"
+                aria-label="Share this post"
+            >
+                <i class="fa fa-share-alt" aria-hidden="true"></i>
+            </a>
+        </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/improvements-of-regressor-in-detector/"
+                    title="Share on Facebook"
+                    aria-label="Share on Facebook"
+                >
+                    <i class="fab fa-facebook" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/improvements-of-regressor-in-detector/"
+                    title="Share on Twitter"
+                    aria-label="Share on Twitter"
+                >
+                    <i class="fab fa-twitter" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/improvements-of-regressor-in-detector/"
+                    title="Share on Weibo"
+                    aria-label="Share on Weibo"
+                >
+                    <i class="fab fa-weibo" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/improvements-of-regressor-in-detector/&amp;title=目標檢測中定位準確性的改進方法"
+                    title="Share on QQ"
+                    aria-label="Share on QQ"
+                >
+                    <i class="fab fa-qq" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+        
+            
+                <li class="post-action">
+                    <a
+                        class="post-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                        <i class="fa fa-comment"></i>
+                    </a>
+                </li>
+            
+        
+        <li class="post-action">
+            
+                <a class="post-action-btn btn btn--default" href="#table-of-contents" aria-label="Table of Contents">
+            
+                <i class="fa fa-list" aria-hidden="true"></i>
+            </a>
+        </li>
+    </ul>
+</div>
+
+
+        
+        
+            
+                <div id="gitalk"></div>
+
+            
+        
+    </div>
+</article>
+
+
+
+                <footer id="footer" class="main-content-wrap">
+    <span class="copyrights">
+        Copyrights &copy; 2021 Tang Huan. All Rights Reserved.
+    </span>
+</footer>
+
+            </div>
+            
+                <div id="bottom-bar" class="post-bottom-bar" data-behavior="4">
+                    <div class="post-bar-actions-wrap">
+    <div class="post-actions post-action-share">
+        <div class="post-action">
+            
+                <a class="post-bar-action-btn btn btn--default" href="#table-of-contents" aria-label="Table of Contents">
+            
+                <i class="fas fa-angle-up" aria-hidden="true"></i>
+            </a>
+        </div>
+        
+            
+                <div class="post-action">
+                    <a 
+                        class="post-bar-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                         <i class="fas fa-angle-down"></i>
+                    </a>
+                </div>
+            
+        
+    </div>
+</div>
+                </div>
+                
+    <div id="share-options-bar" class="share-options-bar" data-behavior="4">
+        <i id="btn-close-shareoptions" class="fa fa-times"></i>
+        <ul class="share-options">
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/improvements-of-regressor-in-detector/"
+                        aria-label="Share on Facebook"
+                    >
+                        <i class="fab fa-facebook" aria-hidden="true"></i><span>Share on Facebook</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/improvements-of-regressor-in-detector/"
+                        aria-label="Share on Twitter"
+                    >
+                        <i class="fab fa-twitter" aria-hidden="true"></i><span>Share on Twitter</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/improvements-of-regressor-in-detector/"
+                        aria-label="Share on Weibo"
+                    >
+                        <i class="fab fa-weibo" aria-hidden="true"></i><span>Share on Weibo</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/improvements-of-regressor-in-detector/&amp;title=目標檢測中定位準確性的改進方法"
+                        aria-label="Share on QQ"
+                    >
+                        <i class="fab fa-qq" aria-hidden="true"></i><span>Share on QQ</span>
+                    </a>
+                </li>
+            
+        </ul>
+    </div>
+
+
+            
+        </div>
+        
+
+
+    
+        
+    
+
+<div id="about">
+    <div id="about-card">
+        <div id="about-btn-close">
+            <i class="fa fa-times"></i>
+        </div>
+        
+            <img id="about-card-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+            <h4 id="about-card-name">Tang Huan</h4>
+        
+            <div id="about-card-bio"></div>
+        
+        
+            <div id="about-card-job">
+                <i class="fa fa-briefcase"></i>
+                <br/>
+                
+            </div>
+        
+        
+            <div id="about-card-location">
+                <i class="fa fa-map-marker-alt"></i>
+                <br/>
+                Shanghai
+            </div>
+        
+    </div>
+</div>
+
+        
+        
+<div id="cover" style="background-image:url('/assets/images/cover.jpg');"></div>
+        
+
+<!--SCRIPTS-->
+
+<script src="/assets/js/script-21vlobaq8sfmdbypn0z91hl6jyot6shixuux8ijser2jcbktmikbwlb6yvjx.min.js"></script>
+
+<!--SCRIPTS END-->
+
+
+    
+      <script type="text/javascript">
+        (function() {
+          function render() {
+            new Gitalk({
+              clientID: 'b7b365f41dbbfaaf9b88',
+              clientSecret: '25de272b8030e3c498dd56b883e4386d881b6d62',
+              repo: 'tangh.github.io',
+              owner: 'tangh',
+              admin: ['tangh'],
+              id: 'articles/improvements-of-regressor-in-detector',
+              title: document.title.replace(' - 雨天等放晴', ''),
+              ...{"language":"en","perPage":10,"distractionFreeMode":false,"enableHotKey":true,"pagerDirection":"first","createIssueManually":true}
+            }).render('gitalk');
+          }
+          var gc = document.createElement('script');
+          gc.type = 'text/javascript';
+          gc.src = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js';
+          gc.charset = 'UTF-8';
+          gc.onload = render;
+          gc.async = true;
+          document.querySelector('body').appendChild(gc);
+          var gcs = document.createElement('link');
+          gcs.href = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.css';
+          gcs.type = 'text/css';
+          gcs.rel = 'stylesheet';
+          gcs.media = 'screen,print';
+          document.querySelector('head').appendChild(gcs);
+        })();
+      </script>
+    
+
+
+
+
+    <script>!function(e){var c=Array.prototype.slice.call(document.querySelectorAll("img[data-original]"));function i(){for(var r=0;r<c.length;r++)t=c[r],(n=t.getBoundingClientRect()).top>=-n.height&&0<=n.left&&n.top<=1.5*(e.innerHeight||document.documentElement.clientHeight)&&function(){var t,n,e,i,o=c[r];t=o,n=function(){c=c.filter(function(t){return o!==t})},e=new Image,i=t.getAttribute("data-original"),e.onload=function(){t.src=i,n&&n()},e.src=i}();var t,n}i(),e.addEventListener("scroll",function(){var t,n;t=i,n=e,clearTimeout(t.tId),t.tId=setTimeout(function(){t.call(n)},500)})}(this);</script><!-- hexo-inject:begin --><!-- Begin: Injected MathJax -->
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config("");
+</script>
+
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Queue(function() {
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i=0; i < all.length; i += 1) {
+      all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+  });
+</script>
+
+<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
+</script>
+<!-- End: Injected MathJax -->
+<!-- hexo-inject:end --></body>
+</html>

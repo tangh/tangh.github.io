@@ -1,0 +1,715 @@
+
+<!DOCTYPE html>
+
+    <html lang="zh-Hant-CN">
+
+    
+<head>
+    <!-- hexo-inject:begin --><!-- hexo-inject:end --><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="generator" content="雨天等放晴">
+    <title>PyTorch 中構建模型和輸入数據的方法 - 雨天等放晴</title>
+    <meta name="author" content="Tang Huan">
+    
+        <meta name="keywords" content="PyTorch,深度學習,数據集,深度学习,数据集">
+    
+    
+        <link rel="icon" href="https://tangh.github.io/assets/images/favicon.png">
+    
+    
+        <link rel="apple-touch-icon" sizes="180x180" href="https://tangh.github.io/assets/images/apple-touch-icon.png">
+    
+    
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg"},"articleBody":"\n\n\n\n\nPyTorch 中構建模型和輸入数據的方法\n\nPyTorch 中多卡及混合精度使用方法\n\n\n最近因為肺炎無法無天只得駐留在家，整理一下早兩年學習的一些資料。\n構建模型的方法最基礎的方法是定義一個類，繼承 nn.Module，然後在其 def __init__() 中定義(實例化) forward() 中需要使用的網絡层。例如 self.name = nn.Conv2d()，這個參数名 name 将作为 model 的属性名，可以透過 model.name 訪問，如果這個层是帶有可學習的參数的，那麼它還會有 model.name.weight 或 model.name.bias 等權重属性。\n定義完所有不同的层之後，就可以在類的 forward() 函数中使用這些层，並決定輸入数據在網絡中的流動。對於一些不含可訓練參数的层，可以在這裡直接使用 nn.functional 中的函数而無需事先定義。\n例如：\n1234567891011121314151617181920212223242526272829import torchimport torch.nn as nnimport torch.nn.functional as Fclass net(nn.Module):    def __init__(self, output_channel):        # 首先必須要初始化父類的所有參数        super(net, self).__init__()        self.conv_1 = nn.Conv2d(3, output_channel, 3)        self.relu_1 = nn.ReLU()    def forward(self, x):        # 可以使用 torch 中對 tensor 的各種操作        size = x.size()        x = self.conv_1(x)        x = self.relu_1(x)        # 重複使用 conv1_1，即兩個卷積共享參数        x = self.conv_1(x)        # 不含 learnable 的层可不定義直接使用        x = F.max_pool2d(x, 2, 2)        x = F.interpolate(x, size, mode=\"bilinear\")        return xmodel = net(output_channel=8)  # 實例化整個網絡，init 中可設置各種參数output = model(input_tensor)  # input_tensor 傳給 forward 中的參数 x&gt;&gt;&gt; print(model.conv_1)&gt;&gt;&gt; Conv2d(3, 8, kernel_size=(3, 3), stride=(1, 1))&gt;&gt;&gt; print(isinstance(model.conv_1.weight, torch.Tensor))&gt;&gt;&gt; True\n\n\n使用 add_module 方法\n在類的初始化函式中，self.name = nn.Module() 等同於調用 self.add_module(&quot;name&quot;, nn.Module()) ，后者這種方法主要是當层比較多而都是重複的結構時（例如 ResNet 中很多殘差單元都是完全相同的），方便自動設置层的名称。對應的在 forward 中常使用 getattr(self, &quot;name&quot;)(x)。\n例如（代碼不完全）：\n123456789101112def __init__(self):    super(net, self).__init__()    for i in range(1, 4):        self.add_module(\"conv1_%s\" % str(i), nn.Conv2d(3, 3, 3, 2, 1))def forward(self, x):    for i in range(1, 4):        x = getattr(self, \"conv1_%s\" str(i))(x)    return x&gt;&gt;&gt; input = torch.randn(1, 3, 16, 16)&gt;&gt;&gt; print(model(input).shape)&gt;&gt;&gt; torch.Size([1, 3, 2, 2])\n\n使用 nn.Sequential，以及更一般的情況\n需要進行一些判斷（以重複使⽤）的层或其它情況，可以将各種层 append 到一個 list 中，然后使⽤解構賦值 self.name = nn.Sequential(*[Conv2d(), Conv2d(), ...])。這樣的层的名稱为数字编号，访问其中的层: model.name[index]。給 nn.Sequential() 內的层賦上名稱，可以使用 from collections import OrderedDict -&gt; nn.Sequential(OrderedDict([(&quot;name1&quot;, layer1()), (&quot;name2&quot;, layer2())]))，加上了名稱之後就可以使用 . 的方法訪問了。\nnn.Sequential 實際上就是一個繼承了 nn.Module 的類，如同最開頭那樣定義的。因此我們可以直接單獨使用它：\n12345678model = nn.Sequential(    nn.Conv2d(3, 3, 3, 2, 1),    nn.Conv2d(3, 3, 3, 2, 1))&gt;&gt;&gt; input = torch.randn(1, 3, 16, 16)# 網絡层的順序是固定了的&gt;&gt;&gt; print(model(input).shape)&gt;&gt;&gt; torch.Size([1, 3, 4, 4])\n\n既然可以在自定義的類（A）中的 init 初始化 nn.Sequential，那麼也可以初始化另一個自定義類（B），當然 nn.Sequential 中也可以添加一個自定義類，最終裡面的层的名稱逐級嵌套，類似於 model.name_in_netA.name_in_netB[index in Sequential]。\n更多的需求可以參考 nn.ModuleList 或 nn.ModuleDict，它們跟 Python 的 list 和 dict 基本相似，但是註冊到了 model 里，可以被整个 model 訪問。創建⽅法是传⼊一個 list 或 dict。此外，ModuleDict 內的层不僅可以用 [&#39;name&#39;] 訪問（同 Python），還可以用 ModuleDict.name 訪問（同 Module）。這兩個方法與 nn.Sequential 的區別在於它們不可以單獨作為一個網絡使用，而必須在一個網絡的 init 中初始化，在 forward 中使用。此外，它們擁有 append 和 update 等方法。\n初始化參数如這章開頭例子所示，卷積等的權重和偏置就是一個 torch.Tensor，將 tensor 傳入初始化函式即可赋上指定的初始化值，一些自帶的初始化函式可在 torch.nn.init 找到，可以看到這些函式都以下劃線結尾，說明它們都是原位改变值的。\n一般而言，會寫一個函式來進行一些判斷和循環完成對所有 tensor 的初始化，例如判斷是卷積的 weight 就使用 kaiming_uniform_()，判斷是卷積的 bias 就使用 zeros_()。關於如何返回所有的 tensor 可參考下一章。\nnn.Module 類的一些属性自定義的類繼承 nn.Module 之後，就可以調用其自帶方法，下面是一些常用的。為方便說明，這裡以 torchvision 內的 VGG-16 為例。導入後使用 vgg = torchvision.models.vgg16() 即可，具體網絡結構可以打開前面的超鏈接或是 IDE 裡打開。\nmodel.modules()這個方法會返回一個 generator，裡面是順次逐級的 model 的所有子模塊，如果某一個子模塊是一個 nn.Module，那麼還返回這個子模塊的所有子模塊。所以返回中第一個值會是整個網絡，第二個值是整個 self.features，接下來第三個開始會展開，依次返回 self.features 裡的所有层，再接下來是 self.avgpool，等等。也就是有\n1234&gt;&gt;&gt; all_modules = list(vgg.modules())&gt;&gt;&gt; all_modules[0].features == all_modules[1]# index=0 是整個網絡，可以像上一章一樣的方法找到子模塊&gt;&gt;&gt; True\n\n這個方法主要用於需要判斷網絡层的類型（卷積、全連接）然後進行下一步操作的，判斷一般使用 for m in model.modules(): -&gt; if isinstance(m, nn.Conv2d): -&gt; ...。例如在初始化 tensor 的值的時候就可以使用，例如 VGG 的 _initialize_weights 對不同類型的层使用不同的初始化方法。\n有一個類似的方法 named_modules()，會返回帶上子模塊名字的字典。還有 children() 和 named_children()，這兩個只返回直接的一級子模塊，而不會展開它們（如果是 nn.Module），可以循環調用直到末尾。\nmodel.parameters()上一個方法的最小單位是 Conv、MaxPool 之類的網絡层，需要通過 m.weight 與 m.bias 訪問其中的權重 tensor，而這個方法會直接返回 model 中所有 tensor，不帶层級結構，每一個元素都是 tensor 且 .requires_grad == True，因此通常被傳給 optimizer。注意返回的都是和網絡中有相同內存地址的 tensor，如果在外部改变了這些 tensor 的值（正常情況下是被 optimizer），那麼網絡中的參数也將改变。\n12345678all_parameters = list(vgg.parameters())# 覆蓋 tensor data，如果不帶 .data，則會覆蓋 requires_grad 等所有參数all_parameters[0].data = torch.ones(64, 3, 3, 3, dtype=torch.float)&gt;&gt;&gt; print(vgg.features[0].weight[1,1])&gt;&gt;&gt; tensor([[1., 1., 1.],        [1., 1., 1.],        [1., 1., 1.]], grad_fn=&lt;SelectBackward&gt;)\n\n同樣的，這個方法也有一個對應的 model.named_paramters()。\nmodel.state_dict()與 .named_parameters() 類似，也是直接返回所有權重，但是除了可學習的 tensor 之外，還會返回一些层的狀態（persistent buffers），比如 BatchNorm 层會不斷紀錄 running averages，雖然不是作用在輸入上的權重，但是也是關係到訓練過程。因此這個方法主要用於保存 checkpoint 的時候返回所有需要保存的值。\n数據集相關的 Dataset 和 Dataloadertorch.utils.data 下有兩個類，一個是 Dataset，用來給出一個索引返回一對圖片和標籤；另一個是 Dataloader，用於將前者以某種方式採樣，並返回一個 batch。\n對於 Dataset，繼承之後重寫 __len__() 和 __getitem()__。\n對於 Dataloader，有 sampler 和 collate_fn。\nRegistryopen-mmlab 和 Facebook 在他們的 MMCV 和 fvcore 中都實現了一個 class Registry。他們在內部保存一個 dict，創建實例時提供一個 name MODELS = Registry(&#39;models&#39;)，然後使用裝飾器 @MODELS.register_module() class ResNet: 或直接調用函數 MODELS.register_module(ResNet) 註冊一個函數到 dict 中。\n關於 Python 的裝飾器：裝飾器是一個函數，參數中接收一個函數 A（的地址）並最終返回一個函數 B，在這個返回的函數 B 的 return 中 A 被執行，B 的 return 之前的部分為裝飾器新添加的功能。\n在執行到 @decorator 的時候，裝飾器函數的最外層（scope x）就已經執行\n123456789101112131415161718192021222324252627282930313233343536373839404142434445def log(func):    # scope x1    def wrapper(*args, **kw):        # scope y1        print('call %s():' % func.__name__)        return func(*args, **kw)    return wrapper@logdef now():    pass# 相當於執行了，現在 now 指向新的函數 log -&gt; wrappernow = log(now)# 裝飾器也可以返回一個裝飾器def log(text=\"\"):    # scope x2    def decorator(func)        # scope y2        def wrapper(*args, **kw):            # scope z2            print('call %s():' % func.__name__)            return func(*args, **kw)        return wrapper    return decorator@log()  # 執行函數得到返回的裝飾器def now():    passnow = log()(now)# 不在執行 func 的時候改變任何，而是執行到 @ 的時候註冊就完事了def register(name=\"\"):    # scope x2    def decorator(module_class)        # scope y2        name = module_class.__name__        add_to_self_dict(module_class, name)        # def wrapper(*args, **kw):        #     # scope z2        #     print('call %s():' % func.__name__)        #     return func(*args, **kw)        # return wrapper        return func    return decorator\n\nimport 時就從頭至尾掃描（執行）了整個文件\n","dateCreated":"2020-03-30T00:00:00+08:00","dateModified":"2021-09-11T17:34:51+08:00","datePublished":"2020-03-30T00:00:00+08:00","description":"PyTorch 使用基礎：構建網絡模型的一些常用方法，class nn.Module 的一些常用属性，utils.data 中構建輸入数據相關的方法。","headline":"PyTorch 中構建模型和輸入数據的方法","image":["https://tangh.github.io/images/thumbnails/pytorch-logo.png"],"mainEntityOfPage":{"@type":"WebPage","@id":"https://tangh.github.io/articles/build-model-and-dataset-in-pytorch/"},"publisher":{"@type":"Organization","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg","logo":{"@type":"ImageObject","url":"icon.jpg"}},"url":"https://tangh.github.io/articles/build-model-and-dataset-in-pytorch/","keywords":"PyTorch, Computer Vision, Deep Learning","thumbnailUrl":"https://tangh.github.io/images/thumbnails/pytorch-logo.png"}</script>
+    <meta name="description" content="PyTorch 使用基礎：構建網絡模型的一些常用方法，class nn.Module 的一些常用属性，utils.data 中構建輸入数據相關的方法。">
+<meta property="og:type" content="blog">
+<meta property="og:title" content="PyTorch 中構建模型和輸入数據的方法">
+<meta property="og:url" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;articles&#x2F;build-model-and-dataset-in-pytorch&#x2F;">
+<meta property="og:site_name" content="雨天等放晴">
+<meta property="og:description" content="PyTorch 使用基礎：構建網絡模型的一些常用方法，class nn.Module 的一些常用属性，utils.data 中構建輸入数據相關的方法。">
+<meta property="og:locale" content="en_US">
+<meta property="article:published_time" content="2020-03-29T16:00:00.000Z">
+<meta property="article:modified_time" content="2021-09-11T09:34:51.126Z">
+<meta property="article:author" content="Tang Huan">
+<meta property="article:tag" content="PyTorch">
+<meta property="article:tag" content="深度學習">
+<meta property="article:tag" content="数據集">
+<meta property="article:tag" content="深度学习">
+<meta property="article:tag" content="数据集">
+<meta name="twitter:card" content="summary">
+    
+    
+        
+    
+    
+        <meta property="og:image" content="https://tangh.github.io/assets/images/icon.jpg"/>
+    
+    
+        <meta property="og:image" content="https://tangh.github.io/images/thumbnails/pytorch-logo.png"/>
+        <meta class="swiftype" name="image" data-type="enum" content="https://tangh.github.io/images/thumbnails/pytorch-logo.png"/>
+    
+    
+    
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
+    <!--STYLES-->
+    
+<link rel="stylesheet" href="/assets/css/style-iaetwm81hfopcuajcp7qnh2zsnqn4dhiu3nftuj79wdhe7fie6l4r0thrs6g.min.css">
+
+    <!--STYLES END-->
+    
+    <script async src="https://www.googletagmanager.com/gtag/js?id=UA-137837052-1"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'UA-137837052-1');
+    </script><!-- hexo-inject:begin --><!-- hexo-inject:end -->
+
+
+    
+
+</head>
+
+    <body>
+        <!-- hexo-inject:begin --><!-- hexo-inject:end --><div id="blog">
+            <!-- Define author's picture -->
+
+
+    
+        
+            
+        
+    
+
+<header id="header" data-behavior="4">
+    <i id="btn-open-sidebar" class="fa fa-lg fa-bars"></i>
+    <div class="header-title">
+        <a
+            class="header-title-link"
+            href="/"
+            aria-label=""
+        >
+            雨天等放晴
+        </a>
+    </div>
+    
+        
+            <a
+                class="header-right-picture "
+                href="#about"
+                aria-label="Open the link: /#about"
+            >
+        
+        
+            <img class="header-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+        </a>
+    
+</header>
+
+            <!-- Define author's picture -->
+
+
+
+        
+    
+
+<nav id="sidebar" data-behavior="4">
+    <div class="sidebar-container">
+        
+            <div class="sidebar-profile">
+                <a
+                    href="/#about"
+                    aria-label="Read more about the author"
+                >
+                    <img class="sidebar-profile-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+                </a>
+                <h4 class="sidebar-profile-name">Tang Huan</h4>
+                
+                    <h5 class="sidebar-profile-bio"></h5>
+                
+            </div>
+        
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/"
+                            
+                            rel="noopener"
+                            title="Home"
+                        >
+                        <i class="sidebar-button-icon fa fa-home" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Home</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-categories"
+                            
+                            rel="noopener"
+                            title="Categories"
+                        >
+                        <i class="sidebar-button-icon fa fa-bookmark" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Categories</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-tags"
+                            
+                            rel="noopener"
+                            title="Tags"
+                        >
+                        <i class="sidebar-button-icon fa fa-tags" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Tags</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-archives"
+                            
+                            rel="noopener"
+                            title="Archives"
+                        >
+                        <i class="sidebar-button-icon fa fa-archive" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Archives</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/about"
+                            
+                            rel="noopener"
+                            title="About"
+                        >
+                        <i class="sidebar-button-icon fas fa-cube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">About</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://twitter.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Twitter"
+                        >
+                        <i class="sidebar-button-icon fab fa-twitter" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Twitter</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.flickr.com/photos/135277712@N07/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Flickr"
+                        >
+                        <i class="sidebar-button-icon fab fa-flickr" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Flickr</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.instagram.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Instagram"
+                        >
+                        <i class="sidebar-button-icon fab fa-instagram" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Instagram</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="YouTube"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">YouTube</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://space.bilibili.com/634428/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="BiliBili"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube-square" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">BiliBili</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+    </div>
+</nav>
+
+            
+            <div id="main" data-behavior="4"
+                 class="
+                        hasCoverMetaIn
+                        ">
+                
+<article class="post">
+    
+    
+        <div class="post-header main-content-wrap text-center">
+    
+        <h1 class="post-title">
+            PyTorch 中構建模型和輸入数據的方法
+        </h1>
+    
+    
+        <div class="post-meta">
+    <time datetime="2020-03-30T00:00:00+08:00">
+	
+		    Mar 30, 2020
+    	
+    </time>
+    
+        <span>in </span>
+        
+    <a class="category-link" href="/categories/Computer-Science/">Computer Science</a>, <a class="category-link" href="/categories/Computer-Science/Deep-Learning/">Deep Learning</a>
+
+
+    
+</div>
+
+    
+</div>
+
+    
+    
+        <div class="post-content markdown">
+    
+        <div class="main-content-wrap">
+            <!-- excerpt -->
+
+<br/>
+
+<ul>
+<li><p><strong>PyTorch 中構建模型和輸入数據的方法</strong></p>
+</li>
+<li><p><a href="https://tangh.github.io/articles/multi-gpu-and-mix-precision-in-pytorch">PyTorch 中多卡及混合精度使用方法</a></p>
+</li>
+</ul>
+<p>最近因為肺炎無法無天只得駐留在家，整理一下早兩年學習的一些資料。</p>
+<h1 id="構建模型的方法"><a href="#構建模型的方法" class="headerlink" title="構建模型的方法"></a>構建模型的方法</h1><p>最基礎的方法是定義一個類，繼承 <code>nn.Module</code>，然後在其 <code>def __init__()</code> 中定義(實例化) <code>forward()</code> 中需要使用的網絡层。例如 <code>self.name = nn.Conv2d()</code>，這個參数名 name 将作为 model 的属性名，可以透過 <code>model.name</code> 訪問，如果這個层是帶有可學習的參数的，那麼它還會有 <code>model.name.weight</code> 或 <code>model.name.bias</code> 等權重属性。</p>
+<p>定義完所有不同的层之後，就可以在類的 <code>forward()</code> 函数中使用這些层，並決定輸入数據在網絡中的流動。對於一些不含可訓練參数的层，可以在這裡直接使用 nn.functional 中的函数而無需事先定義。</p>
+<p>例如：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> torch</span><br><span class="line"><span class="keyword">import</span> torch.nn <span class="keyword">as</span> nn</span><br><span class="line"><span class="keyword">import</span> torch.nn.functional <span class="keyword">as</span> F</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">net</span><span class="params">(nn.Module)</span>:</span></span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">__init__</span><span class="params">(self, output_channel)</span>:</span></span><br><span class="line">        <span class="comment"># 首先必須要初始化父類的所有參数</span></span><br><span class="line">        super(net, self).__init__()</span><br><span class="line">        self.conv_1 = nn.Conv2d(<span class="number">3</span>, output_channel, <span class="number">3</span>)</span><br><span class="line">        self.relu_1 = nn.ReLU()</span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">forward</span><span class="params">(self, x)</span>:</span></span><br><span class="line">        <span class="comment"># 可以使用 torch 中對 tensor 的各種操作</span></span><br><span class="line">        size = x.size()</span><br><span class="line">        x = self.conv_1(x)</span><br><span class="line">        x = self.relu_1(x)</span><br><span class="line">        <span class="comment"># 重複使用 conv1_1，即兩個卷積共享參数</span></span><br><span class="line">        x = self.conv_1(x)</span><br><span class="line">        <span class="comment"># 不含 learnable 的层可不定義直接使用</span></span><br><span class="line">        x = F.max_pool2d(x, <span class="number">2</span>, <span class="number">2</span>)</span><br><span class="line">        x = F.interpolate(x, size, mode=<span class="string">"bilinear"</span>)</span><br><span class="line">        <span class="keyword">return</span> x</span><br><span class="line"></span><br><span class="line">model = net(output_channel=<span class="number">8</span>)  <span class="comment"># 實例化整個網絡，init 中可設置各種參数</span></span><br><span class="line">output = model(input_tensor)  <span class="comment"># input_tensor 傳給 forward 中的參数 x</span></span><br><span class="line"></span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>print(model.conv_1)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>Conv2d(<span class="number">3</span>, <span class="number">8</span>, kernel_size=(<span class="number">3</span>, <span class="number">3</span>), stride=(<span class="number">1</span>, <span class="number">1</span>))</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>print(isinstance(model.conv_1.weight, torch.Tensor))</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span><span class="literal">True</span></span><br></pre></td></tr></table></figure>
+
+
+<p><strong>使用 add_module 方法</strong></p>
+<p>在類的初始化函式中，<code>self.name = nn.Module()</code> 等同於調用 <code>self.add_module(&quot;name&quot;, nn.Module())</code> ，后者這種方法主要是當层比較多而都是重複的結構時（例如 ResNet 中很多殘差單元都是完全相同的），方便自動設置层的名称。對應的在 forward 中常使用 <code>getattr(self, &quot;name&quot;)(x)</code>。</p>
+<p>例如（代碼不完全）：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">__init__</span><span class="params">(self)</span>:</span></span><br><span class="line">    super(net, self).__init__()</span><br><span class="line">    <span class="keyword">for</span> i <span class="keyword">in</span> range(<span class="number">1</span>, <span class="number">4</span>):</span><br><span class="line">        self.add_module(<span class="string">"conv1_%s"</span> % str(i), nn.Conv2d(<span class="number">3</span>, <span class="number">3</span>, <span class="number">3</span>, <span class="number">2</span>, <span class="number">1</span>))</span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">forward</span><span class="params">(self, x)</span>:</span></span><br><span class="line">    <span class="keyword">for</span> i <span class="keyword">in</span> range(<span class="number">1</span>, <span class="number">4</span>):</span><br><span class="line">        x = getattr(self, <span class="string">"conv1_%s"</span> str(i))(x)</span><br><span class="line">    <span class="keyword">return</span> x</span><br><span class="line"></span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>input = torch.randn(<span class="number">1</span>, <span class="number">3</span>, <span class="number">16</span>, <span class="number">16</span>)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>print(model(input).shape)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>torch.Size([<span class="number">1</span>, <span class="number">3</span>, <span class="number">2</span>, <span class="number">2</span>])</span><br></pre></td></tr></table></figure>
+
+<p><strong>使用 nn.Sequential，以及更一般的情況</strong></p>
+<p>需要進行一些判斷（以重複使⽤）的层或其它情況，可以将各種层 append 到一個 list 中，然后使⽤解構賦值 <code>self.name = nn.Sequential(*[Conv2d(), Conv2d(), ...])</code>。這樣的层的名稱为数字编号，访问其中的层: <code>model.name[index]</code>。給 <code>nn.Sequential()</code> 內的层賦上名稱，可以使用 <code>from collections import OrderedDict</code> -&gt; <code>nn.Sequential(OrderedDict([(&quot;name1&quot;, layer1()), (&quot;name2&quot;, layer2())]))</code>，加上了名稱之後就可以使用 <code>.</code> 的方法訪問了。</p>
+<p><code>nn.Sequential</code> 實際上就是一個繼承了 <code>nn.Module</code> 的類，如同最開頭那樣定義的。因此我們可以直接單獨使用它：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">model = nn.Sequential(</span><br><span class="line">    nn.Conv2d(<span class="number">3</span>, <span class="number">3</span>, <span class="number">3</span>, <span class="number">2</span>, <span class="number">1</span>),</span><br><span class="line">    nn.Conv2d(<span class="number">3</span>, <span class="number">3</span>, <span class="number">3</span>, <span class="number">2</span>, <span class="number">1</span>)</span><br><span class="line">)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>input = torch.randn(<span class="number">1</span>, <span class="number">3</span>, <span class="number">16</span>, <span class="number">16</span>)</span><br><span class="line"><span class="comment"># 網絡层的順序是固定了的</span></span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>print(model(input).shape)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>torch.Size([<span class="number">1</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">4</span>])</span><br></pre></td></tr></table></figure>
+
+<p>既然可以在自定義的類（A）中的 init 初始化 <code>nn.Sequential</code>，那麼也可以初始化另一個自定義類（B），當然 <code>nn.Sequential</code> 中也可以添加一個自定義類，最終裡面的层的名稱逐級嵌套，類似於 <code>model.name_in_netA.name_in_netB[index in Sequential]</code>。</p>
+<p>更多的需求可以參考 <a href="https://pytorch.org/docs/stable/nn.html#modulelist" target="_blank" rel="noopener"><code>nn.ModuleList</code></a> 或 <a href="https://pytorch.org/docs/stable/nn.html#moduledict" target="_blank" rel="noopener"><code>nn.ModuleDict</code></a>，它們跟 Python 的 list 和 dict 基本相似，但是註冊到了 model 里，可以被整个 model 訪問。創建⽅法是传⼊一個 list 或 dict。此外，ModuleDict 內的层不僅可以用 <code>[&#39;name&#39;]</code> 訪問（同 Python），還可以用 <code>ModuleDict.name</code> 訪問（同 Module）。<br>這兩個方法與 <code>nn.Sequential</code> 的區別在於它們不可以單獨作為一個網絡使用，而必須在一個網絡的 init 中初始化，在 forward 中使用。此外，它們擁有 append 和 update 等方法。</p>
+<h2 id="初始化參数"><a href="#初始化參数" class="headerlink" title="初始化參数"></a>初始化參数</h2><p>如這章開頭例子所示，卷積等的權重和偏置就是一個 <code>torch.Tensor</code>，將 tensor 傳入初始化函式即可赋上指定的初始化值，一些自帶的初始化函式可在 <a href="https://pytorch.org/docs/stable/nn.init.html" target="_blank" rel="noopener">torch.nn.init</a> 找到，可以看到這些函式都以下劃線結尾，說明它們都是原位改变值的。</p>
+<p>一般而言，會寫一個函式來進行一些判斷和循環完成對所有 tensor 的初始化，例如判斷是卷積的 <code>weight</code> 就使用 <code>kaiming_uniform_()</code>，判斷是卷積的 <code>bias</code> 就使用 <code>zeros_()</code>。關於如何返回所有的 tensor 可參考下一章。</p>
+<h1 id="nn-Module-類的一些属性"><a href="#nn-Module-類的一些属性" class="headerlink" title="nn.Module 類的一些属性"></a>nn.Module 類的一些属性</h1><p>自定義的類繼承 <code>nn.Module</code> 之後，就可以調用其自帶方法，下面是一些常用的。為方便說明，這裡以 torchvision 內的 <a href="https://github.com/pytorch/vision/blob/master/torchvision/models/vgg.py" target="_blank" rel="noopener">VGG-16</a> 為例。導入後使用 <code>vgg = torchvision.models.vgg16()</code> 即可，具體網絡結構可以打開前面的超鏈接或是 IDE 裡打開。</p>
+<h2 id="model-modules"><a href="#model-modules" class="headerlink" title="model.modules()"></a>model.modules()</h2><p>這個方法會返回一個 generator，裡面是順次逐級的 model 的所有子模塊，如果某一個子模塊是一個 <code>nn.Module</code>，那麼還返回這個子模塊的所有子模塊。所以返回中第一個值會是整個網絡，第二個值是整個 <code>self.features</code>，接下來第三個開始會展開，依次返回 <code>self.features</code> 裡的所有层，再接下來是 <code>self.avgpool</code>，等等。也就是有</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">&gt;&gt;&gt; </span>all_modules = list(vgg.modules())</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>all_modules[<span class="number">0</span>].features == all_modules[<span class="number">1</span>]</span><br><span class="line"><span class="comment"># index=0 是整個網絡，可以像上一章一樣的方法找到子模塊</span></span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span><span class="literal">True</span></span><br></pre></td></tr></table></figure>
+
+<p>這個方法主要用於需要判斷網絡层的類型（卷積、全連接）然後進行下一步操作的，判斷一般使用 <code>for m in model.modules(): -&gt; if isinstance(m, nn.Conv2d): -&gt; ...</code>。例如在初始化 tensor 的值的時候就可以使用，例如 VGG 的 <a href="https://github.com/pytorch/vision/blob/master/torchvision/models/vgg.py#L49-L60" target="_blank" rel="noopener"><code>_initialize_weights</code></a> 對不同類型的层使用不同的初始化方法。</p>
+<p>有一個類似的方法 <code>named_modules()</code>，會返回帶上子模塊名字的字典。還有 <code>children()</code> 和 <code>named_children()</code>，這兩個只返回直接的一級子模塊，而不會展開它們（如果是 <code>nn.Module</code>），可以循環調用直到末尾。</p>
+<h2 id="model-parameters"><a href="#model-parameters" class="headerlink" title="model.parameters()"></a>model.parameters()</h2><p>上一個方法的最小單位是 Conv、MaxPool 之類的網絡层，需要通過 <code>m.weight</code> 與 <code>m.bias</code> 訪問其中的權重 tensor，而這個方法會直接返回 model 中所有 tensor，不帶层級結構，每一個元素都是 tensor 且 <code>.requires_grad == True</code>，因此通常被傳給 optimizer。注意返回的都是和網絡中有相同內存地址的 tensor，如果在外部改变了這些 tensor 的值（正常情況下是被 optimizer），那麼網絡中的參数也將改变。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">all_parameters = list(vgg.parameters())</span><br><span class="line"><span class="comment"># 覆蓋 tensor data，如果不帶 .data，則會覆蓋 requires_grad 等所有參数</span></span><br><span class="line">all_parameters[<span class="number">0</span>].data = torch.ones(<span class="number">64</span>, <span class="number">3</span>, <span class="number">3</span>, <span class="number">3</span>, dtype=torch.float)</span><br><span class="line"></span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>print(vgg.features[<span class="number">0</span>].weight[<span class="number">1</span>,<span class="number">1</span>])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>tensor([[<span class="number">1.</span>, <span class="number">1.</span>, <span class="number">1.</span>],</span><br><span class="line">        [<span class="number">1.</span>, <span class="number">1.</span>, <span class="number">1.</span>],</span><br><span class="line">        [<span class="number">1.</span>, <span class="number">1.</span>, <span class="number">1.</span>]], grad_fn=&lt;SelectBackward&gt;)</span><br></pre></td></tr></table></figure>
+
+<p>同樣的，這個方法也有一個對應的 <code>model.named_paramters()</code>。</p>
+<h2 id="model-state-dict"><a href="#model-state-dict" class="headerlink" title="model.state_dict()"></a>model.state_dict()</h2><p>與 <code>.named_parameters()</code> 類似，也是直接返回所有權重，但是除了可學習的 tensor 之外，還會返回一些层的狀態（persistent buffers），比如 BatchNorm 层會不斷紀錄 running averages，雖然不是作用在輸入上的權重，但是也是關係到訓練過程。因此這個方法主要用於保存 checkpoint 的時候返回所有需要保存的值。</p>
+<h1 id="数據集相關的-Dataset-和-Dataloader"><a href="#数據集相關的-Dataset-和-Dataloader" class="headerlink" title="数據集相關的 Dataset 和 Dataloader"></a>数據集相關的 Dataset 和 Dataloader</h1><p><code>torch.utils.data</code> 下有兩個類，一個是 <code>Dataset</code>，用來給出一個索引返回一對圖片和標籤；另一個是 <code>Dataloader</code>，用於將前者以某種方式採樣，並返回一個 batch。</p>
+<p>對於 <code>Dataset</code>，繼承之後重寫 <code>__len__()</code> 和 <code>__getitem()__</code>。</p>
+<p>對於 <code>Dataloader</code>，有 <code>sampler</code> 和 <code>collate_fn</code>。</p>
+<h1 id="Registry"><a href="#Registry" class="headerlink" title="Registry"></a>Registry</h1><p>open-mmlab 和 Facebook 在他們的 <a href="https://github.com/open-mmlab/mmcv/blob/master/mmcv/utils/registry.py" target="_blank" rel="noopener">MMCV</a> 和 <a href="https://github.com/facebookresearch/fvcore/blob/master/fvcore/common/registry.py" target="_blank" rel="noopener">fvcore</a> 中都實現了一個 <code>class Registry</code>。他們在內部保存一個 dict，創建實例時提供一個 name <code>MODELS = Registry(&#39;models&#39;)</code>，然後使用裝飾器 <code>@MODELS.register_module() class ResNet:</code> 或直接調用函數 <code>MODELS.register_module(ResNet)</code> 註冊一個函數到 dict 中。</p>
+<p>關於 Python 的裝飾器：裝飾器是一個函數，參數中接收一個函數 A（的地址）並最終返回一個函數 B，在這個返回的函數 B 的 return 中 A 被執行，B 的 return 之前的部分為裝飾器新添加的功能。</p>
+<p>在執行到 <code>@decorator</code> 的時候，裝飾器函數的最外層（scope x）就已經執行</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">log</span><span class="params">(func)</span>:</span></span><br><span class="line">    <span class="comment"># scope x1</span></span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">wrapper</span><span class="params">(*args, **kw)</span>:</span></span><br><span class="line">        <span class="comment"># scope y1</span></span><br><span class="line">        print(<span class="string">'call %s():'</span> % func.__name__)</span><br><span class="line">        <span class="keyword">return</span> func(*args, **kw)</span><br><span class="line">    <span class="keyword">return</span> wrapper</span><br><span class="line"></span><br><span class="line"><span class="meta">@log</span></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">now</span><span class="params">()</span>:</span></span><br><span class="line">    <span class="keyword">pass</span></span><br><span class="line"><span class="comment"># 相當於執行了，現在 now 指向新的函數 log -&gt; wrapper</span></span><br><span class="line">now = log(now)</span><br><span class="line"></span><br><span class="line"><span class="comment"># 裝飾器也可以返回一個裝飾器</span></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">log</span><span class="params">(text=<span class="string">""</span>)</span>:</span></span><br><span class="line">    <span class="comment"># scope x2</span></span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">decorator</span><span class="params">(func)</span></span></span><br><span class="line"><span class="function">        # <span class="title">scope</span> <span class="title">y2</span></span></span><br><span class="line"><span class="function">        <span class="title">def</span> <span class="title">wrapper</span><span class="params">(*args, **kw)</span>:</span></span><br><span class="line">            <span class="comment"># scope z2</span></span><br><span class="line">            print(<span class="string">'call %s():'</span> % func.__name__)</span><br><span class="line">            <span class="keyword">return</span> func(*args, **kw)</span><br><span class="line">        <span class="keyword">return</span> wrapper</span><br><span class="line">    <span class="keyword">return</span> decorator</span><br><span class="line"></span><br><span class="line"><span class="meta">@log()  # 執行函數得到返回的裝飾器</span></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">now</span><span class="params">()</span>:</span></span><br><span class="line">    <span class="keyword">pass</span></span><br><span class="line">now = log()(now)</span><br><span class="line"></span><br><span class="line"><span class="comment"># 不在執行 func 的時候改變任何，而是執行到 @ 的時候註冊就完事了</span></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">register</span><span class="params">(name=<span class="string">""</span>)</span>:</span></span><br><span class="line">    <span class="comment"># scope x2</span></span><br><span class="line">    <span class="function"><span class="keyword">def</span> <span class="title">decorator</span><span class="params">(module_class)</span></span></span><br><span class="line"><span class="function">        # <span class="title">scope</span> <span class="title">y2</span></span></span><br><span class="line">        name = module_class.__name__</span><br><span class="line">        add_to_self_dict(module_class, name)</span><br><span class="line">        <span class="comment"># def wrapper(*args, **kw):</span></span><br><span class="line">        <span class="comment">#     # scope z2</span></span><br><span class="line">        <span class="comment">#     print('call %s():' % func.__name__)</span></span><br><span class="line">        <span class="comment">#     return func(*args, **kw)</span></span><br><span class="line">        <span class="comment"># return wrapper</span></span><br><span class="line">        <span class="keyword">return</span> func</span><br><span class="line">    <span class="keyword">return</span> decorator</span><br></pre></td></tr></table></figure>
+
+<p>import 時就從頭至尾掃描（執行）了整個文件</p>
+<br/>
+            
+
+
+        </div>
+    </div>
+    <div id="post-footer" class="post-footer main-content-wrap">
+        
+            <div class="post-footer-tags">
+                <span class="text-color-light text-small">TAGGED IN</span><br/>
+                
+    <a class="tag tag--primary tag--small t-link" href="/tags/Computer-Vision/" rel="tag">Computer Vision</a> <a class="tag tag--primary tag--small t-link" href="/tags/Deep-Learning/" rel="tag">Deep Learning</a> <a class="tag tag--primary tag--small t-link" href="/tags/PyTorch/" rel="tag">PyTorch</a>
+
+            </div>
+        
+        
+            <div class="post-actions-wrap">
+    <nav>
+        <ul class="post-actions post-action-nav">
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/frequently-used-built-in-loss-functions/"
+                    data-tooltip="深度學習中一些常用的內建損失函数"
+                    aria-label="PREVIOUS: 深度學習中一些常用的內建損失函数"
+                >
+                    
+                        <i class="fa fa-angle-left" aria-hidden="true"></i>
+                        <span class="hide-xs hide-sm text-small icon-ml">PREVIOUS</span>
+                    </a>
+            </li>
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/icip-in-taiwan-sees-and-hears/"
+                    data-tooltip="ICIP 2019 于台湾之见闻"
+                    aria-label="NEXT: ICIP 2019 于台湾之见闻"
+                >
+                    
+                        <span class="hide-xs hide-sm text-small icon-mr">NEXT</span>
+                        <i class="fa fa-angle-right" aria-hidden="true"></i>
+                    </a>
+            </li>
+        </ul>
+    </nav>
+    <ul class="post-actions post-action-share">
+        <li class="post-action hide-lg hide-md hide-sm">
+            <a
+                class="post-action-btn btn btn--default btn-open-shareoptions"
+                href="#btn-open-shareoptions"
+                aria-label="Share this post"
+            >
+                <i class="fa fa-share-alt" aria-hidden="true"></i>
+            </a>
+        </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/build-model-and-dataset-in-pytorch/"
+                    title="Share on Facebook"
+                    aria-label="Share on Facebook"
+                >
+                    <i class="fab fa-facebook" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/build-model-and-dataset-in-pytorch/"
+                    title="Share on Twitter"
+                    aria-label="Share on Twitter"
+                >
+                    <i class="fab fa-twitter" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/build-model-and-dataset-in-pytorch/"
+                    title="Share on Weibo"
+                    aria-label="Share on Weibo"
+                >
+                    <i class="fab fa-weibo" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/build-model-and-dataset-in-pytorch/&amp;title=PyTorch 中構建模型和輸入数據的方法"
+                    title="Share on QQ"
+                    aria-label="Share on QQ"
+                >
+                    <i class="fab fa-qq" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+        
+            
+                <li class="post-action">
+                    <a
+                        class="post-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                        <i class="fa fa-comment"></i>
+                    </a>
+                </li>
+            
+        
+        <li class="post-action">
+            
+                <a class="post-action-btn btn btn--default" href="#" aria-label="Back to top">
+            
+                <i class="fa fa-list" aria-hidden="true"></i>
+            </a>
+        </li>
+    </ul>
+</div>
+
+
+        
+        
+            
+                <div id="gitalk"></div>
+
+            
+        
+    </div>
+</article>
+
+
+
+                <footer id="footer" class="main-content-wrap">
+    <span class="copyrights">
+        Copyrights &copy; 2021 Tang Huan. All Rights Reserved.
+    </span>
+</footer>
+
+            </div>
+            
+                <div id="bottom-bar" class="post-bottom-bar" data-behavior="4">
+                    <div class="post-bar-actions-wrap">
+    <div class="post-actions post-action-share">
+        <div class="post-action">
+            
+                <a class="post-bar-action-btn btn btn--default" href="#" aria-label="Back to top">
+            
+                <i class="fas fa-angle-up" aria-hidden="true"></i>
+            </a>
+        </div>
+        
+            
+                <div class="post-action">
+                    <a 
+                        class="post-bar-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                         <i class="fas fa-angle-down"></i>
+                    </a>
+                </div>
+            
+        
+    </div>
+</div>
+                </div>
+                
+    <div id="share-options-bar" class="share-options-bar" data-behavior="4">
+        <i id="btn-close-shareoptions" class="fa fa-times"></i>
+        <ul class="share-options">
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/build-model-and-dataset-in-pytorch/"
+                        aria-label="Share on Facebook"
+                    >
+                        <i class="fab fa-facebook" aria-hidden="true"></i><span>Share on Facebook</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/build-model-and-dataset-in-pytorch/"
+                        aria-label="Share on Twitter"
+                    >
+                        <i class="fab fa-twitter" aria-hidden="true"></i><span>Share on Twitter</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/build-model-and-dataset-in-pytorch/"
+                        aria-label="Share on Weibo"
+                    >
+                        <i class="fab fa-weibo" aria-hidden="true"></i><span>Share on Weibo</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/build-model-and-dataset-in-pytorch/&amp;title=PyTorch 中構建模型和輸入数據的方法"
+                        aria-label="Share on QQ"
+                    >
+                        <i class="fab fa-qq" aria-hidden="true"></i><span>Share on QQ</span>
+                    </a>
+                </li>
+            
+        </ul>
+    </div>
+
+
+            
+        </div>
+        
+
+
+    
+        
+    
+
+<div id="about">
+    <div id="about-card">
+        <div id="about-btn-close">
+            <i class="fa fa-times"></i>
+        </div>
+        
+            <img id="about-card-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+            <h4 id="about-card-name">Tang Huan</h4>
+        
+            <div id="about-card-bio"></div>
+        
+        
+            <div id="about-card-job">
+                <i class="fa fa-briefcase"></i>
+                <br/>
+                
+            </div>
+        
+        
+            <div id="about-card-location">
+                <i class="fa fa-map-marker-alt"></i>
+                <br/>
+                Shanghai
+            </div>
+        
+    </div>
+</div>
+
+        
+        
+<div id="cover" style="background-image:url('/assets/images/cover.jpg');"></div>
+        
+
+<!--SCRIPTS-->
+
+<script src="/assets/js/script-21vlobaq8sfmdbypn0z91hl6jyot6shixuux8ijser2jcbktmikbwlb6yvjx.min.js"></script>
+
+<!--SCRIPTS END-->
+
+
+    
+      <script type="text/javascript">
+        (function() {
+          function render() {
+            new Gitalk({
+              clientID: 'b7b365f41dbbfaaf9b88',
+              clientSecret: '25de272b8030e3c498dd56b883e4386d881b6d62',
+              repo: 'tangh.github.io',
+              owner: 'tangh',
+              admin: ['tangh'],
+              id: 'articles/build-model-and-dataset-in-pytorch',
+              title: document.title.replace(' - 雨天等放晴', ''),
+              ...{"language":"en","perPage":10,"distractionFreeMode":false,"enableHotKey":true,"pagerDirection":"first","createIssueManually":true}
+            }).render('gitalk');
+          }
+          var gc = document.createElement('script');
+          gc.type = 'text/javascript';
+          gc.src = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js';
+          gc.charset = 'UTF-8';
+          gc.onload = render;
+          gc.async = true;
+          document.querySelector('body').appendChild(gc);
+          var gcs = document.createElement('link');
+          gcs.href = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.css';
+          gcs.type = 'text/css';
+          gcs.rel = 'stylesheet';
+          gcs.media = 'screen,print';
+          document.querySelector('head').appendChild(gcs);
+        })();
+      </script>
+    
+
+
+
+
+    <script>!function(e){var c=Array.prototype.slice.call(document.querySelectorAll("img[data-original]"));function i(){for(var r=0;r<c.length;r++)t=c[r],(n=t.getBoundingClientRect()).top>=-n.height&&0<=n.left&&n.top<=1.5*(e.innerHeight||document.documentElement.clientHeight)&&function(){var t,n,e,i,o=c[r];t=o,n=function(){c=c.filter(function(t){return o!==t})},e=new Image,i=t.getAttribute("data-original"),e.onload=function(){t.src=i,n&&n()},e.src=i}();var t,n}i(),e.addEventListener("scroll",function(){var t,n;t=i,n=e,clearTimeout(t.tId),t.tId=setTimeout(function(){t.call(n)},500)})}(this);</script><!-- hexo-inject:begin --><!-- hexo-inject:end --></body>
+</html>

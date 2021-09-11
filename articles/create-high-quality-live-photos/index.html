@@ -1,0 +1,687 @@
+
+<!DOCTYPE html>
+
+    <html lang="zh-Hant-CN">
+
+    
+<head>
+    <!-- hexo-inject:begin --><!-- hexo-inject:end --><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="generator" content="雨天等放晴">
+    <title>生成高質量的 Live Photo 的方法 - 雨天等放晴</title>
+    <meta name="author" content="Tang Huan">
+    
+        <meta name="keywords" content="Live Photos,Google Photos">
+    
+    
+        <link rel="icon" href="https://tangh.github.io/assets/images/favicon.png">
+    
+    
+        <link rel="apple-touch-icon" sizes="180x180" href="https://tangh.github.io/assets/images/apple-touch-icon.png">
+    
+    
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg"},"articleBody":"\n\n我先說點不相干的，一個是感覺我今年很能寫，這跟我換了一台新的高配 16” Mac 關係很大（之前在兩台電腦上同步真的會降低寫東西的熱情），二個是買了兩台很好的顯示器（老家和上海都有了），然後外接我的鍵鼠，哇，別提多舒服了。\n前幾天，就在我在青海西北部剛得到聯不通的信號📶的時候，我看見一條 tweet 說 Google Photos 更新了。哇，它做了一個我很想要的功能，那就是 GeoTag Heatmap。我之前準備用 Flickr 和 Google Map 提供的一些 API 自己做一個，但是沒有時間琢磨。這下好了，我反正兩個 Google 帳號是分開的，所以我的私人照片和公開照片都可以有這個很強的功能了。\nGoogle Photos 在 iOS 上直接上傳的話，其實是支持 Live Photo 的。這個功能我覺得還是很有意思的，而且如果用電腦來做的話，畫質會很棒的。我就研究了一下如何創建一個高質量的 Live Photo。\n目前 App Store 裡有不少 App 可以在手機上直接把視頻（+自定義照片）轉換為一張 Live Photo，但是，我試用一下，發現它們各有各的問題，總結一下就是：\n\n完全遺失 Exif 等 Metadata，這樣日期、地點都沒了（地點沒了我還怎麼用 Google 的神奇新功能呢❓）\n\n視頻都是 re-encoding 過的，參数亂搞，有的強制 30fps，有的 bit rate 隨心所欲，VFR 和 CFR 也是很隨意\n\n對於照片通通都是 JPEG 輸出，會莫名其妙的參数壓縮，視頻也是都是 AVC (H.264)\n\n\n總之，寫這些 App 的人，一定都沒有正確處理照片和影片的經驗。其實回顧一下，這個要求挺高的，看看 Android 的手機，就會發現幾乎全部中國廠商都沒有正確 Tag 這些信息，這說來話長也涉及很多知識。所以 iPhone 真是偉大的手機，我也很興奮看到一些國內開發者在做一些「專業」App 時是真的懂這些東西的，比如最近的 ProTake，真的很棒。\n\n說正題，經過昨天一晚上試驗和學習，我得出，完美的解決方案一定需要親自寫一個軟件，調用 QuickTime 來生成視頻（尤其是對於 HEIC+HEVC）。但是目前，利用現有工具，我有一個很不完美的方案，可以出 JPEG+AVC，圖完全不改変，視頻在 1080P 下近乎完美。\n預備知識\n一個 Live Photo 包含相同文件名的 .JPG 和 .MOV 文件。除了文件名相同，它們還有一個奇妙的 Metadata，這會讓系統認為他們是一起的。在 JPEG 中，會有一段 Apple - ContentIdentifier，在 MOV 中，會有一段 com.apple.quicktime.content.identifier，這兩個 UUID 一致的時候，合體就這樣發生了！\n比較難辦的是 MOV，畢竟是水果的特殊信息，很多開源工具都不能寫入這個信息，我試過 FFmpeg、ExifTool 等，都不行。我看了下 Mac 上的現有軟件，都是調用 QuickTime，比如這個 LoveLiver，所以完美方案還是需要自己寫 Mac/iOS 的代碼。\n目前方法\n目前，我找到一個 App，叫做 LiveStudio（居然是我 4 年前買的），它會保持 frame rate 和 resolution，缺點就是會轉成 VFR（這是 iOS default，問題不大吧），以及給 1080P～14Mbps、4K～56Mbps。這個 bit rate 太高了，所以用 4K 文件會很大，2K 的話 5s 在 10MB 左右，合理！好處大概是，反正視頻也很短，配上這種 bit rate，默認參数壓縮畫質也很難変差。所以，把視頻先導入手機，用這個 App 生成一個 Live Photo。\n好，現在 Live Photo 導入到 Mac 上，拿 MediaInfo 之類的就可以看到這個 UUID 是多少了，或者直接看它給出的 JPEG 裡面的，用 exif.cn 什麼都行。現在需要往自己的「高清」JPEG 裡寫入這個 UUID。我覺得，用 Python3 最方便不過了，首先安裝 piexif 這個庫，我用的 Python3.7 一切正常。這個 UUID，在 Exif 的 37500 這個位置。類似於 37500: b&#39;Apple iOS\\x00\\x00\\x01MM\\x00\\x01\\x00\\x11\\x00\\x02\\x00\\x00\\x00%\\x00\\x00\\x00 \\x00\\x00\\x00\\x003E1CB85B-98DC-4B34-96DA-0A1EB6BA3172\\x00\\x00&#39;。\n祖傳代碼來了：\n1234567891011src = \"~/Downloads/src.jpg\"dst = \"~/Downloads/dst.jpg\"import piexifexif_dict_src = piexif.load(src)exif_dict_dst = piexif.load(dst)exif_dict_dst[\"Exif\"].update(&#123;37500: exif_dict_src[\"Exif\"][37500]&#125;)exif_bytes = piexif.dump(exif_dict_dst)piexif.insert(exif_bytes, dst)\n\n就這麼簡單，這個 UUID 就被插入。而其他所有信息都保持不変，圖片的 bytes 也是完全不変。然後只要把這個 dst 和之前的 mov 改成同一個文件名就 OK。\n希望年底之前我能寫個完美 App（感覺在說屁），什麼時候寫了什麼時候更新。\nGoogle 的奇葩事：它的視頻最寬是 1920（×1920？），長度是 4.5s。我服了，Apple 都沒有這種限制。不過下載下來的文件還是原始的，就是 App 內不能播放。\n","dateCreated":"2020-07-04T00:00:00+08:00","dateModified":"2021-05-24T01:28:51+08:00","datePublished":"2020-07-04T00:00:00+08:00","description":"生成高質量 Live Photo 的很不完美解決方案。","headline":"生成高質量的 Live Photo 的方法","image":[],"mainEntityOfPage":{"@type":"WebPage","@id":"https://tangh.github.io/articles/create-high-quality-live-photos/"},"publisher":{"@type":"Organization","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg","logo":{"@type":"ImageObject","url":"icon.jpg"}},"url":"https://tangh.github.io/articles/create-high-quality-live-photos/","keywords":"Live Photos, Google Photos"}</script>
+    <meta name="description" content="生成高質量 Live Photo 的很不完美解決方案。">
+<meta property="og:type" content="blog">
+<meta property="og:title" content="生成高質量的 Live Photo 的方法">
+<meta property="og:url" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;articles&#x2F;create-high-quality-live-photos&#x2F;">
+<meta property="og:site_name" content="雨天等放晴">
+<meta property="og:description" content="生成高質量 Live Photo 的很不完美解決方案。">
+<meta property="og:locale" content="en_US">
+<meta property="article:published_time" content="2020-07-03T16:00:00.000Z">
+<meta property="article:modified_time" content="2021-05-23T17:28:51.052Z">
+<meta property="article:author" content="Tang Huan">
+<meta property="article:tag" content="Live Photos">
+<meta property="article:tag" content="Google Photos">
+<meta name="twitter:card" content="summary">
+    
+    
+        
+    
+    
+        <meta property="og:image" content="https://tangh.github.io/assets/images/icon.jpg"/>
+    
+    
+    
+    
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
+    <!--STYLES-->
+    
+<link rel="stylesheet" href="/assets/css/style-iaetwm81hfopcuajcp7qnh2zsnqn4dhiu3nftuj79wdhe7fie6l4r0thrs6g.min.css">
+
+    <!--STYLES END-->
+    
+    <script async src="https://www.googletagmanager.com/gtag/js?id=UA-137837052-1"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'UA-137837052-1');
+    </script><!-- hexo-inject:begin --><!-- hexo-inject:end -->
+
+
+    
+
+</head>
+
+    <body>
+        <!-- hexo-inject:begin --><!-- hexo-inject:end --><div id="blog">
+            <!-- Define author's picture -->
+
+
+    
+        
+            
+        
+    
+
+<header id="header" data-behavior="1">
+    <i id="btn-open-sidebar" class="fa fa-lg fa-bars"></i>
+    <div class="header-title">
+        <a
+            class="header-title-link"
+            href="/"
+            aria-label=""
+        >
+            雨天等放晴
+        </a>
+    </div>
+    
+        
+            <a
+                class="header-right-picture "
+                href="#about"
+                aria-label="Open the link: /#about"
+            >
+        
+        
+            <img class="header-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+        </a>
+    
+</header>
+
+            <!-- Define author's picture -->
+
+
+
+        
+    
+
+<nav id="sidebar" data-behavior="1">
+    <div class="sidebar-container">
+        
+            <div class="sidebar-profile">
+                <a
+                    href="/#about"
+                    aria-label="Read more about the author"
+                >
+                    <img class="sidebar-profile-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+                </a>
+                <h4 class="sidebar-profile-name">Tang Huan</h4>
+                
+                    <h5 class="sidebar-profile-bio"></h5>
+                
+            </div>
+        
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/"
+                            
+                            rel="noopener"
+                            title="Home"
+                        >
+                        <i class="sidebar-button-icon fa fa-home" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Home</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-categories"
+                            
+                            rel="noopener"
+                            title="Categories"
+                        >
+                        <i class="sidebar-button-icon fa fa-bookmark" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Categories</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-tags"
+                            
+                            rel="noopener"
+                            title="Tags"
+                        >
+                        <i class="sidebar-button-icon fa fa-tags" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Tags</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-archives"
+                            
+                            rel="noopener"
+                            title="Archives"
+                        >
+                        <i class="sidebar-button-icon fa fa-archive" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Archives</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/about"
+                            
+                            rel="noopener"
+                            title="About"
+                        >
+                        <i class="sidebar-button-icon fas fa-cube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">About</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://twitter.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Twitter"
+                        >
+                        <i class="sidebar-button-icon fab fa-twitter" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Twitter</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.flickr.com/photos/135277712@N07/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Flickr"
+                        >
+                        <i class="sidebar-button-icon fab fa-flickr" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Flickr</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.instagram.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Instagram"
+                        >
+                        <i class="sidebar-button-icon fab fa-instagram" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Instagram</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="YouTube"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">YouTube</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://space.bilibili.com/634428/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="BiliBili"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube-square" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">BiliBili</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+    </div>
+</nav>
+
+            
+            <div id="main" data-behavior="1"
+                 class="
+                        hasCoverMetaIn
+                        ">
+                
+<article class="post">
+    
+    
+        <div class="post-header main-content-wrap text-left">
+    
+        <h1 class="post-title">
+            生成高質量的 Live Photo 的方法
+        </h1>
+    
+    
+        <div class="post-meta">
+    <time datetime="2020-07-04T00:00:00+08:00">
+	
+		    Jul 04, 2020
+    	
+    </time>
+    
+        <span>in </span>
+        
+    <a class="category-link" href="/categories/Computer/">Computer</a>, <a class="category-link" href="/categories/Computer/Software/">Software</a>
+
+
+    
+</div>
+
+    
+</div>
+
+    
+    
+        <div class="post-content markdown">
+    
+        <div class="main-content-wrap">
+            <!-- excerpt -->
+
+<p>我先說點不相干的，一個是感覺我今年很能寫，這跟我換了一台新的高配 16” Mac 關係很大（之前在兩台電腦上同步真的會降低寫東西的熱情），二個是買了兩台很好的顯示器（老家和上海都有了），然後外接我的鍵鼠，哇，別提多舒服了。</p>
+<p>前幾天，就在我在青海西北部剛得到聯不通的信號📶的時候，我看見一條 tweet 說 Google Photos 更新了。哇，它做了一個我很想要的功能，那就是 GeoTag Heatmap。我之前準備用 Flickr 和 Google Map 提供的一些 API 自己做一個，但是沒有時間琢磨。這下好了，我反正兩個 Google 帳號是分開的，所以我的私人照片和公開照片都可以有這個很強的功能了。</p>
+<p>Google Photos 在 iOS 上直接上傳的話，其實是支持 Live Photo 的。這個功能我覺得還是很有意思的，而且如果用電腦來做的話，畫質會很棒的。我就研究了一下如何創建一個高質量的 Live Photo。</p>
+<p>目前 App Store 裡有不少 App 可以在手機上直接把視頻（+自定義照片）轉換為一張 Live Photo，但是，我試用一下，發現它們各有各的問題，總結一下就是：</p>
+<ul>
+<li><p>完全遺失 Exif 等 Metadata，這樣日期、地點都沒了（地點沒了我還怎麼用 Google 的神奇新功能呢❓）</p>
+</li>
+<li><p>視頻都是 re-encoding 過的，參数亂搞，有的強制 30fps，有的 bit rate 隨心所欲，VFR 和 CFR 也是很隨意</p>
+</li>
+<li><p>對於照片通通都是 JPEG 輸出，會莫名其妙的參数壓縮，視頻也是都是 AVC (H.264)</p>
+</li>
+</ul>
+<p>總之，寫這些 App 的人，一定都沒有正確處理照片和影片的經驗。其實回顧一下，這個要求挺高的，看看 Android 的手機，就會發現幾乎全部中國廠商都沒有正確 Tag 這些信息，這說來話長也涉及很多知識。所以 iPhone 真是偉大的手機，我也很興奮看到一些國內開發者在做一些「專業」App 時是真的懂這些東西的，比如最近的 ProTake，真的很棒。</p>
+<hr>
+<p>說正題，經過昨天一晚上試驗和學習，我得出，完美的解決方案一定需要親自寫一個軟件，調用 QuickTime 來生成視頻（尤其是對於 HEIC+HEVC）。但是目前，利用現有工具，我有一個很不完美的方案，可以出 JPEG+AVC，圖完全不改変，視頻在 1080P 下近乎完美。</p>
+<p><strong>預備知識</strong></p>
+<p>一個 Live Photo 包含相同文件名的 <code>.JPG</code> 和 <code>.MOV</code> 文件。除了文件名相同，它們還有一個奇妙的 Metadata，這會讓系統認為他們是一起的。在 JPEG 中，會有一段 <code>Apple - ContentIdentifier</code>，在 MOV 中，會有一段 <code>com.apple.quicktime.content.identifier</code>，這兩個 UUID 一致的時候，合體就這樣發生了！</p>
+<p>比較難辦的是 MOV，畢竟是水果的特殊信息，很多開源工具都不能寫入這個信息，我試過 <a href="https://ffmpeg.org/" target="_blank" rel="noopener">FFmpeg</a>、<a href="https://exiftool.org/forum/index.php?topic=3440.0" target="_blank" rel="noopener">ExifTool</a> 等，都不行。我看了下 Mac 上的現有軟件，都是調用 QuickTime，比如這個 <a href="https://github.com/mzp/LoveLiver/blob/1.3.0/LoveLiver/QuickTimeMov.swift#L14" target="_blank" rel="noopener">LoveLiver</a>，所以完美方案還是需要自己寫 Mac/iOS 的代碼。</p>
+<p><strong>目前方法</strong></p>
+<p>目前，我找到一個 App，叫做 <a href="https://apps.apple.com/us/app/live-studio-all-in-one/id1046360736" target="_blank" rel="noopener">LiveStudio</a>（居然是我 4 年前買的），它會保持 frame rate 和 resolution，缺點就是會轉成 VFR（這是 iOS default，問題不大吧），以及給 <code>1080P～14Mbps</code>、<code>4K～56Mbps</code>。這個 bit rate 太高了，所以用 4K 文件會很大，2K 的話 5s 在 10MB 左右，合理！好處大概是，反正視頻也很短，配上這種 bit rate，默認參数壓縮畫質也很難変差。所以，把視頻先導入手機，用這個 App 生成一個 Live Photo。</p>
+<p>好，現在 Live Photo 導入到 Mac 上，拿 MediaInfo 之類的就可以看到這個 UUID 是多少了，或者直接看它給出的 JPEG 裡面的，用 exif.cn 什麼都行。現在需要往自己的「高清」JPEG 裡寫入這個 UUID。我覺得，用 Python3 最方便不過了，首先安裝 <a href="https://github.com/hMatoba/Piexif" target="_blank" rel="noopener">piexif</a> 這個庫，我用的 Python3.7 一切正常。這個 UUID，在 Exif 的 <code>37500</code> 這個位置。類似於 <code>37500: b&#39;Apple iOS\x00\x00\x01MM\x00\x01\x00\x11\x00\x02\x00\x00\x00%\x00\x00\x00 \x00\x00\x00\x003E1CB85B-98DC-4B34-96DA-0A1EB6BA3172\x00\x00&#39;</code>。</p>
+<p>祖傳代碼來了：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">src = <span class="string">"~/Downloads/src.jpg"</span></span><br><span class="line">dst = <span class="string">"~/Downloads/dst.jpg"</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">import</span> piexif</span><br><span class="line"></span><br><span class="line">exif_dict_src = piexif.load(src)</span><br><span class="line">exif_dict_dst = piexif.load(dst)</span><br><span class="line"></span><br><span class="line">exif_dict_dst[<span class="string">"Exif"</span>].update(&#123;<span class="number">37500</span>: exif_dict_src[<span class="string">"Exif"</span>][<span class="number">37500</span>]&#125;)</span><br><span class="line">exif_bytes = piexif.dump(exif_dict_dst)</span><br><span class="line">piexif.insert(exif_bytes, dst)</span><br></pre></td></tr></table></figure>
+
+<p>就這麼簡單，這個 UUID 就被插入。而其他所有信息都保持不変，圖片的 bytes 也是完全不変。然後只要把這個 dst 和之前的 mov 改成同一個文件名就 OK。</p>
+<p>希望年底之前我能寫個完美 App（感覺在說屁），什麼時候寫了什麼時候更新。</p>
+<p>Google 的奇葩事：它的視頻最寬是 1920（×1920？），長度是 4.5s。我服了，Apple 都沒有這種限制。不過下載下來的文件還是原始的，就是 App 內不能播放。</p>
+<br/>
+            
+
+
+        </div>
+    </div>
+    <div id="post-footer" class="post-footer main-content-wrap">
+        
+            <div class="post-footer-tags">
+                <span class="text-color-light text-small">TAGGED IN</span><br/>
+                
+    <a class="tag tag--primary tag--small t-link" href="/tags/Google-Photos/" rel="tag">Google Photos</a> <a class="tag tag--primary tag--small t-link" href="/tags/Live-Photos/" rel="tag">Live Photos</a>
+
+            </div>
+        
+        
+            <div class="post-actions-wrap">
+    <nav>
+        <ul class="post-actions post-action-nav">
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/linux-cv-development-env-configuration/"
+                    data-tooltip="Linux CV 基本環境配置"
+                    aria-label="PREVIOUS: Linux CV 基本環境配置"
+                >
+                    
+                        <i class="fa fa-angle-left" aria-hidden="true"></i>
+                        <span class="hide-xs hide-sm text-small icon-ml">PREVIOUS</span>
+                    </a>
+            </li>
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/improvements-of-regressor-in-detector/"
+                    data-tooltip="目標檢測中定位準確性的改進方法"
+                    aria-label="NEXT: 目標檢測中定位準確性的改進方法"
+                >
+                    
+                        <span class="hide-xs hide-sm text-small icon-mr">NEXT</span>
+                        <i class="fa fa-angle-right" aria-hidden="true"></i>
+                    </a>
+            </li>
+        </ul>
+    </nav>
+    <ul class="post-actions post-action-share">
+        <li class="post-action hide-lg hide-md hide-sm">
+            <a
+                class="post-action-btn btn btn--default btn-open-shareoptions"
+                href="#btn-open-shareoptions"
+                aria-label="Share this post"
+            >
+                <i class="fa fa-share-alt" aria-hidden="true"></i>
+            </a>
+        </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/create-high-quality-live-photos/"
+                    title="Share on Facebook"
+                    aria-label="Share on Facebook"
+                >
+                    <i class="fab fa-facebook" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/create-high-quality-live-photos/"
+                    title="Share on Twitter"
+                    aria-label="Share on Twitter"
+                >
+                    <i class="fab fa-twitter" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/create-high-quality-live-photos/"
+                    title="Share on Weibo"
+                    aria-label="Share on Weibo"
+                >
+                    <i class="fab fa-weibo" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/create-high-quality-live-photos/&amp;title=生成高質量的 Live Photo 的方法"
+                    title="Share on QQ"
+                    aria-label="Share on QQ"
+                >
+                    <i class="fab fa-qq" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+        
+            
+                <li class="post-action">
+                    <a
+                        class="post-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                        <i class="fa fa-comment"></i>
+                    </a>
+                </li>
+            
+        
+        <li class="post-action">
+            
+                <a class="post-action-btn btn btn--default" href="#" aria-label="Back to top">
+            
+                <i class="fa fa-list" aria-hidden="true"></i>
+            </a>
+        </li>
+    </ul>
+</div>
+
+
+        
+        
+            
+                <div id="gitalk"></div>
+
+            
+        
+    </div>
+</article>
+
+
+
+                <footer id="footer" class="main-content-wrap">
+    <span class="copyrights">
+        Copyrights &copy; 2021 Tang Huan. All Rights Reserved.
+    </span>
+</footer>
+
+            </div>
+            
+                <div id="bottom-bar" class="post-bottom-bar" data-behavior="1">
+                    <div class="post-bar-actions-wrap">
+    <div class="post-actions post-action-share">
+        <div class="post-action">
+            
+                <a class="post-bar-action-btn btn btn--default" href="#" aria-label="Back to top">
+            
+                <i class="fas fa-angle-up" aria-hidden="true"></i>
+            </a>
+        </div>
+        
+            
+                <div class="post-action">
+                    <a 
+                        class="post-bar-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                         <i class="fas fa-angle-down"></i>
+                    </a>
+                </div>
+            
+        
+    </div>
+</div>
+                </div>
+                
+    <div id="share-options-bar" class="share-options-bar" data-behavior="1">
+        <i id="btn-close-shareoptions" class="fa fa-times"></i>
+        <ul class="share-options">
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/create-high-quality-live-photos/"
+                        aria-label="Share on Facebook"
+                    >
+                        <i class="fab fa-facebook" aria-hidden="true"></i><span>Share on Facebook</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/create-high-quality-live-photos/"
+                        aria-label="Share on Twitter"
+                    >
+                        <i class="fab fa-twitter" aria-hidden="true"></i><span>Share on Twitter</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/create-high-quality-live-photos/"
+                        aria-label="Share on Weibo"
+                    >
+                        <i class="fab fa-weibo" aria-hidden="true"></i><span>Share on Weibo</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/create-high-quality-live-photos/&amp;title=生成高質量的 Live Photo 的方法"
+                        aria-label="Share on QQ"
+                    >
+                        <i class="fab fa-qq" aria-hidden="true"></i><span>Share on QQ</span>
+                    </a>
+                </li>
+            
+        </ul>
+    </div>
+
+
+            
+        </div>
+        
+
+
+    
+        
+    
+
+<div id="about">
+    <div id="about-card">
+        <div id="about-btn-close">
+            <i class="fa fa-times"></i>
+        </div>
+        
+            <img id="about-card-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+            <h4 id="about-card-name">Tang Huan</h4>
+        
+            <div id="about-card-bio"></div>
+        
+        
+            <div id="about-card-job">
+                <i class="fa fa-briefcase"></i>
+                <br/>
+                
+            </div>
+        
+        
+            <div id="about-card-location">
+                <i class="fa fa-map-marker-alt"></i>
+                <br/>
+                Shanghai
+            </div>
+        
+    </div>
+</div>
+
+        
+        
+<div id="cover" style="background-image:url('/assets/images/cover.jpg');"></div>
+        
+
+<!--SCRIPTS-->
+
+<script src="/assets/js/script-21vlobaq8sfmdbypn0z91hl6jyot6shixuux8ijser2jcbktmikbwlb6yvjx.min.js"></script>
+
+<!--SCRIPTS END-->
+
+
+    
+      <script type="text/javascript">
+        (function() {
+          function render() {
+            new Gitalk({
+              clientID: 'b7b365f41dbbfaaf9b88',
+              clientSecret: '25de272b8030e3c498dd56b883e4386d881b6d62',
+              repo: 'tangh.github.io',
+              owner: 'tangh',
+              admin: ['tangh'],
+              id: 'articles/create-high-quality-live-photos',
+              title: document.title.replace(' - 雨天等放晴', ''),
+              ...{"language":"en","perPage":10,"distractionFreeMode":false,"enableHotKey":true,"pagerDirection":"first","createIssueManually":true}
+            }).render('gitalk');
+          }
+          var gc = document.createElement('script');
+          gc.type = 'text/javascript';
+          gc.src = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js';
+          gc.charset = 'UTF-8';
+          gc.onload = render;
+          gc.async = true;
+          document.querySelector('body').appendChild(gc);
+          var gcs = document.createElement('link');
+          gcs.href = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.css';
+          gcs.type = 'text/css';
+          gcs.rel = 'stylesheet';
+          gcs.media = 'screen,print';
+          document.querySelector('head').appendChild(gcs);
+        })();
+      </script>
+    
+
+
+
+
+    <script>!function(e){var c=Array.prototype.slice.call(document.querySelectorAll("img[data-original]"));function i(){for(var r=0;r<c.length;r++)t=c[r],(n=t.getBoundingClientRect()).top>=-n.height&&0<=n.left&&n.top<=1.5*(e.innerHeight||document.documentElement.clientHeight)&&function(){var t,n,e,i,o=c[r];t=o,n=function(){c=c.filter(function(t){return o!==t})},e=new Image,i=t.getAttribute("data-original"),e.onload=function(){t.src=i,n&&n()},e.src=i}();var t,n}i(),e.addEventListener("scroll",function(){var t,n;t=i,n=e,clearTimeout(t.tId),t.tId=setTimeout(function(){t.call(n)},500)})}(this);</script><!-- hexo-inject:begin --><!-- hexo-inject:end --></body>
+</html>

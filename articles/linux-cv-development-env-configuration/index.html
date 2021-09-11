@@ -1,0 +1,890 @@
+
+<!DOCTYPE html>
+
+    <html lang="zh-Hant-CN">
+
+    
+<head>
+    <!-- hexo-inject:begin --><!-- hexo-inject:end --><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="generator" content="雨天等放晴">
+    <title>Linux CV 基本環境配置 - 雨天等放晴</title>
+    <meta name="author" content="Tang Huan">
+    
+        <meta name="keywords" content="Jupyter,VSCode,Cuda,Cudnn,nccl,NVENC,FFmpeg,OpenCV,Docker">
+    
+    
+        <link rel="icon" href="https://tangh.github.io/assets/images/favicon.png">
+    
+    
+        <link rel="apple-touch-icon" sizes="180x180" href="https://tangh.github.io/assets/images/apple-touch-icon.png">
+    
+    
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg"},"articleBody":"\n\n整理一下關於 Linux 上 CV 開發環境的各種工具的配置。包括各種錯誤的處理，在無 root 權限下安裝到指定目錄，以及多人共用 root 帳戶的情況下重複安裝不同版本且不影響系統中已存在的版本。\n從幾個文件目錄開始\nbin 放置可執行的二進制程序，可以直接運行；lib 是一些動態鏈接庫，其它程序依賴；include 則是一些 C 的頭文件，在編譯程序的時候，要 include 進來。\n/bin：zsh、ls、rm、mkdir，所有用戶可以使用的與系統相關的程序。/sbin：shutdown、ifconfig、mount，系統運行直接相關的需要 root 權限的程序/usr/bin：whereis、tar、clang、g++，系統預裝的程序。/usr/sbin 同樣為需要 root 權限的/usr/local/bin：ffmpeg、x264，一些自己安裝的第三方程序。/usr/local/sbin 同理\n此外一些包管理軟件，例如 Homebrew 安裝在 /usr/local/Cellar/ 下，並軟鏈接到 /usr/local/bin。一些大型的包管理軟件比如 Anaconda 會安裝在 /usr/local/opt 或 ~/opt 下。\n環境変量\n上述這些 bin 文件夾都是默認在 PATH 中的，所以打開 Terminal 直接敲指令就可以使用，不需要帶程序路徑，如果在其它地方的程序，就需要軟鏈接到這裡（/usr/local/bin），或者把其它路徑加到 PATH 中，例如 ~/.bashrc/~/.zshrc 內 export PATH=&quot;/Users/kotori/opt/anaconda3/bin:$PATH。\n同樣的，在上述標準的動態鏈接庫 lib 內的 .so 也可以正常被其它需要調用的程序識別到，也可以軟鏈接（到 /usr/local/lib）或 export LD_LIBRARY_PATH=/mnt/x264-master:$LD_LIBRARY_PATH。查看已在環境中的 lib 的位置 ldconfig -p | grep lib。\n如果 head file 不在上述標準的 include 文件夾内，那麽 gcc 編譯的時候就要指定一下 -I。\n例如在 macOS 用 Homebrew 時，如果檢測到系統已經安裝了某程序，那麼它就不會把 /usr/local/Cellar/ 內的程序鏈接到 /usr/local/bin，brew info opencv@3 顯示：\n12opencv@3 is keg-only, which means it was not symlinked into &#x2F;usr&#x2F;local, because this is an alternate version of another formula.&#x2F;usr&#x2F;local&#x2F;Cellar&#x2F;opencv@3&#x2F;3.4.5_6 (656 files, 235.6MB)\n\n這時候如果其它程序編譯需要 Homebrew 的這個版本的 OpenCV 而不是系統内原有的話，就要指定一下 -I/usr/local/Cellar/opencv@3/3.4.5_6/include，-L/usr/local/Cellar/opencv@3/3.4.5_6/lib\n多版本共存\n一般軟件編譯后的 sudo make install 就是直接將編譯得到的可執行文件和 lib 複製到 usr/local。如果無 root 權限，或是多人共用 root 而系統内已經有一個別人裝好的，但這個版本/配置不符合要求時，可以不進行 sudo make install，而是統一在：\n在有自己賬戶時，可以在 bashrc 中配置 export XXX，這樣每次登錄時自動把自定義目錄添加到環境變量中。\n多人共用 root 時，可以在 bashrc 中配置一個 alias XXX=export XXX，每次登錄 shell 時敲一下，不影響其他人。\nConda\nconda 不僅可以管理 python 包（安裝在 miniconda3/envs/&lt;env_name&gt;/lib/python3.x/site-packages），也可以管理其他軟件（bin/lib，例如 Cuda/FFmpeg 等）（安裝在 miniconda3/env/&lt;env_name&gt;/bin）。\nSSH\nssh-keygen -t rsa -C &quot;&lt;comment&gt;&quot; 生成公鑰私鑰，ssh-copy-id -i ~/.ssh/id_rsa.pub root@10.x.x.x 將 public key 寫入到遠程機器的 ~/.ssh/authorized_key 文件中，或者（通過其它接口）手動複製進去。\nCuda想要不坑最好還是把 Cuda 更新到很新，在 2020 就是 10.2（目前 11.0 已經發布），可以看一下 PyTorch 它提供的編譯好的版本中 Cuda 最新的是哪個即可。要安裝以下幾個東西：\n\n顯卡驅動，也就是 nvidia-smi 會顯示的版本。\n\nhttps://www.nvidia.com/download/Find.aspx 按 Cuda ToolKit 版本搜索最新，一個 .run 文件（前面一半是個安裝 shell 指令，後面一半是個安裝文件 tar）。\n\ncuda complier/cuda runtime toolkit，也就是 nvcc -V 會顯示的版本，準確說顯示的是 Runtime API 的版本。我見過 Driver API Version: 9.2, Runtime API Version: 9.0 的機器，一般要求的都是 Runtime API 版本，它是 Driver API 的更高一層抽象，基本全部都是調用的 Runtime API。\n\nhttps://developer.nvidia.com/cuda-downloads 在 Legacy Releases 中，有 run/deb/rpm 包，我喜歡用 run 的。\n\ncudnn，用於深度學習的加速庫 (CUDA Deep Neural Network library)，cat /usr/local/cuda/include/cudnn.h | grep CUDNN_MAJOR -A 2 可查看版本。\n\nhttps://developer.nvidia.com/cudnn 要註冊，填一個 survey。有 tar/deb/rpm，它是一個編譯好了的 lib 和一些 head，我喜歡用 tar 然後 cp &amp;&amp; chomod 即可。參考 installlinux-tar。下載時選第一個 cuDNN Library for Linux (x86) 即可，如果得到 solitairetheme8 後綴的文件手動改一下後綴名即可。\n\n如果有多卡，還需要 nccl，一個多卡之間的通信後端（比如 PyTorch 中的 torch.distributed 中很多方法就是 nccl 的實現）\n\nhttps://developer.nvidia.com/nccl/nccl-download 同樣要註冊和填一個 survey。只有 Ubuntu/Debian 的 deb 和 RedHat/CentOS 的 rpm，按對應系統選即可。\n由於 Cuda 和 前面的 CPU 工具是並行的存在，所以這些 GPU 相關東西都會裝在 /usr/local/cuda 中，調用 Cuda 的軟件也會自動在這個目錄下查找 bin 和 lib 和 include。在 Windows 下的 cuda 文件夾會自動帶上版本號，因此可以多版本共存。在 Linux 下，Cuda 10.1 update2 之後可以指定安裝目錄。\nFFmpeg with nvenc前幾個月聽說現在 NVENC 效果不錯了，配置了一個試試看，大概 6x 的速度，1.4x 的文件體積？對於不極致質量追求的地方應該說相當好用。官網：developer.nvidia.com，trac.ffmpeg.org/wiki/HWAccelIntro\n用包管理器的好處就是它真的很貼心，常用的組件通通給配好了。自己編譯的話，每個依賴都要先手動裝好然後在 configure 裡 enable。但是目前包管理器安裝的 FFmpeg 一般都不會帶 GPU 編碼器。\n系統環境\ndriver 版本 Driver Version: 396.44complier/cuda toolkit 版本 Cuda compilation tools, release 9.0, V9.0.176\n這裡有個坑點，nvenc API version 並不知道怎麼查看，而它直接關係到頭文件的版本，我隨便編譯了一個之後運行的時候顯示，這裡才看到是 8.1\n12[h264_nvenc @ 0x36d8640] Driver does not support the required nvenc API version. Required: 10.0 Found: 8.1[h264_nvenc @ 0x36d8640] The minimum required Nvidia driver for nvenc is 445.87 or newer\n\n然後重新搞了一個，反正也挺快的。。。\nDependenciesCompiler\n除了 gcc/g++ 之外，ffmpeg 为了提高效率使用了汇编指令，如 MMX 和 SSE 等，所以先要安裝 yasm，x264 還需要 nasm，否則會報錯 nasm/yasm not found or too old. Use --disable-x86asm for a crippled build.\nyasm：Debian 下直接 sudo apt-get install yasm。\nnasm：www.nasm.us，下載後直接運行 ./configure，尋找編譯器並生成相應 Makefile，然後 make 編譯，之後 make install 裝進 /usr/local/bin。\nx264\n我怎麼覺得 libavcodec 就帶了 x264 編解碼啊？但是實踐告訴我 Unknown encoder &#39;libx264&#39; 就是要單獨搞搞。\n總還是會用到 CPU 編碼，所以 git clone https://code.videolan.org/videolan/x264.git 得到源碼後，./configure --enable-static --enable-shared，然後 make -&gt; sudo make install 給它編譯安裝。\n這會生成 .a (Archive libraries ) 靜態編譯的程序會用到，和 .so (shared object) 的動態庫。\nlibmp3lame\n一個 mp3 的編碼器，總之 FFmpeg 啥都要自己配好才工作，apt-get install libmp3lame-dev 或者與 x264 一樣的安裝方式。它好像也可以 AAC，我試了下是 OK 的？\nHead File\n然後 clone 一下頭文件 https://github.com/FFmpeg/nv-codec-headers，這裡知道系統裡的 API 是 8.1 的（上面那個系統環境版本簡直太「經典」了），所以 git checkout -b sdk/8.1 origin/sdk/8.1 把老版本的拉下來。cd nv-codec-headers &amp;&amp; sudo make install &amp;&amp; cd – 編譯。\nCompile and Command把 FFmpeg clone 下來，然後配置啟動一下 x264、libmp3lame、nvenc，cuda 不在標準目錄要指定一下 -I 和 -L\n./configure --enable-cuda-nvcc --enable-cuvid --enable-nvenc --enable-nonfree --enable-libnpp --enable-gpl --enable-libx264 --enable-libmp3lame --extra-cflags=-I/usr/local/cuda/include --extra-ldflags=-L/usr/local/cuda/lib64\n生成 Makefile 後，make -j 10 -&gt; make install\n我這裡碰到奇怪情況，明明都 make install 了，但是好像沒在環境変量裡，而且 x264 也是，運行會顯示：./ffmpeg: error while loading shared libraries: libx264.so.161: cannot open shared object file: No such file or directory\nldd ./ffmpeg 看了下，顯示以下：\n123456linux-vdso.so.1 (0x00007fff12dac000)  ...  liblzma.so.5 &#x3D;&gt; &#x2F;lib&#x2F;x86_64-linux-gnu&#x2F;liblzma.so.5 (0x00007f52f5bcf000)  libx264.so.161 &#x3D;&gt; not found  libpthread.so.0 &#x3D;&gt; &#x2F;lib&#x2F;x86_64-linux-gnu&#x2F;libpthread.so.0 (0x00007f52f59b2000)  ...\n\n/usr/local/lib 裡明明有個 libx264.so soft link -&gt; libx264.so.161，不知道它為啥要找帶版本號後綴的。有說 /etc/ld.so.conf 加上 x264 clone 到的目錄然後 sudo ldconfig。感覺不如直接 export LD_LIBRARY_PATH=/mnt/x264-master:$LD_LIBRARY_PATH，然後把 FFmpeg 也 export 到 PATH 裡。\ncommand\nffmpeg -hwaccel cuvid -hwaccel_output_format cuda (-c:v h264_cuvid) -i a.avi -i b.mp4 -map 0:0 -map 1:1 -c:v h264_nvenc -c:a copy -y c.mp4\n啟用 GPU 編解碼，加上解碼也有不小速度提升，source 不是 h.264 的也有提升（去掉括號內的）。\nFFmpeg Static Builds官網上發現有個 static build，不用 GPU 的話不如直接用這玩意方便，什麼都帶。\n一鍵安裝腳本innerlee/setup 這個 repo 提供了常用軟件的安裝腳本。\n配置環境變量\n123export ZZROOT=$&#123;some path&#125;/appexport PATH=$ZZROOT/bin:$PATHexport LD_LIBRARY_PATH=$ZZROOT/lib:$ZZROOT/lib64:$LD_LIBRARY_PATH\n\n所有腳本會把 downloads，解壓到 src，然後編譯並安裝到 bin 或 lib。DCMAKE_INSTALL_PREFIX=$ZZROOT 和其它一系列 FLAGS。\nmake DESTDIR=/home/john install\nTroubleShoot對於 CMake 中需要下載的一些網絡資源，例如儲存在 GitHub 上，以 OpenCV 為例。\n在 opencv/3rdparty/ippicv 中會下載 ～60 MB 的 ippicv，在 opencv_contrib/modules/xfeatures2d 中會下載 boostdesc_binboost 和 vgg_generated。這些二進制文件都在 opencv_3rdparty repo 不同的 branch 中，可以看一下 .cmake 文件中的 SHA，例如 set(IPPICV_COMMIT &quot;a56b6ac6f030c312b2dce17430eef13aed9af274&quot;)，再找到對應的 branch（一般就是最新的，檢查一下 iigalanin Update IPPICV binaries (20191018)    a56b6ac on Feb 25）。\n123456789set(IPPICV_COMMIT &quot;a56b6ac6f030c312b2dce17430eef13aed9af274&quot;)&quot;$&#123;OPENCV_IPPICV_URL&#125;&quot;                &quot;$ENV&#123;OPENCV_IPPICV_URL&#125;&quot;                &quot;https:&#x2F;&#x2F;raw.githubusercontent.com&#x2F;opencv&#x2F;opencv_3rdparty&#x2F;$&#123;IPPICV_COMMIT&#125;&#x2F;ippicv&#x2F;&quot;if(X86_64)  set(OPENCV_ICV_NAME &quot;ippicv_2019_lnx_intel64_general_20180723.tgz&quot;)  set(OPENCV_ICV_HASH &quot;c0bd78adb4156bbf552c1dfe90599607&quot;)\n\n拼接 https://raw.githubusercontent.com/opencv/opencv_3rdparty/32e315a5b106a7b89dbed51c28f8120a48b368b4/ippicv/ippicv_2019_lnx_intel64_general_20180723.tgz\n以 ippicv 爲例，牆内一般卡在 IPPICV: Download: ippicv_2019_lnx_intel64_general_20180723.tgz 然後超時。\n把這些用代理下載好後，放到例如 $ZZROOT/app/3rdparty 中，然後修改對應 cmake 文件中的\n12345678910ocv_download(FILENAME $&#123;OPENCV_ICV_NAME&#125;             HASH $&#123;OPENCV_ICV_HASH&#125;             URL               &quot;$&#123;OPENCV_IPPICV_URL&#125;&quot;               &quot;$ENV&#123;OPENCV_IPPICV_URL&#125;&quot;               &quot;https:&#x2F;&#x2F;raw.githubusercontent.com&#x2F;opencv&#x2F;opencv_3rdparty&#x2F;$&#123;IPPICV_COMMIT&#125;&#x2F;ippicv&#x2F;&quot;             DESTINATION_DIR &quot;$&#123;THE_ROOT&#125;&quot;             ID IPPICV             STATUS res             UNPACK RELATIVE_URL)\n\n&quot;https://raw.githubusercontent.com/opencv/opencv_3rdparty/${IPPICV_COMMIT}/ippicv/&quot; 修改為 &quot;file:///data/app/3rdparty &quot;\n還要 comment 一下腳本中把 tar 解壓到 src 的步驟。\nOpenCV\n12CMakeFiles&#x2F;Makefile2:4315: recipe for target &#39;modules&#x2F;videoio&#x2F;CMakeFiles&#x2F;opencv_videoio.dir&#x2F;all&#39; failedmake: *** [all] Error 2\n\nvideoio 一般是 FFmpeg 錯誤，沒有配置好 share 或者沒有把路徑添加到環境變量。\nJupyter and VSCodeJupyter 和 VSCode 可以遠程連接到服務器作業，然後保存直接更改到服務器上。Jupyter 是啟動了一個 http 服務，然後在網頁上進行編輯，原生 VSCode 用的是 SSH。不管怎樣都是比 Vim 方便。Jupyter 上傳下載文件方便一點，不需要 SFTP 了。VSCode 帶了 Terminal，且有自動補全，各種都好用。\nJupyter\n在網上看了一圈，發現都是莫名奇妙的配置方法，麻煩且，我感覺就多人共用一個 root 還是挺常見的吧，直接命令生成新的配置覆蓋不好吧。。其實它可以指定配置文件啟動。把底下的祖傳配置腳本隨便放到哪，然後 jupyter notebook --allow-root -y --ip=0.0.0.0 --config=&quot;&lt;path&gt;/jupyter_notebook_config.py&quot; 就好。其實只要有 --ip=0.0.0.0 都不需要後面的 config 它就會啟動一個可以遠程登陸的 kernel，這個 ip 默認是 localhost，寫 0 自動用本機 IP，端口 8888。下面的 config 主要是自定義一個端口和打開 Jupyter 之後的工作目錄，以及獲取環境變量中的 password。\n12345678910111213141516171819202122import osfrom IPython.lib import passwdc = get_config()# default is `localhost`, set to `0.0.0.0` to enable remote loginc.NotebookApp.ip = '0.0.0.0'# set an unique portc.NotebookApp.port = int(os.getenv('PORT', 12345))c.NotebookApp.open_browser = False# set jupyter workspace dirc.NotebookApp.notebook_dir = \"/data/kotori/workspace\"# sets a password if PASSWORD is set in the environment# otherwise generate a login tokenif 'PASSWORD' in os.environ:  password = os.environ['PASSWORD']  if password:    c.NotebookApp.password = passwd(password)  else:    c.NotebookApp.password = ''    c.NotebookApp.token = ''  # del os.environ['PASSWORD']\n\n運行之後會顯示下面的，它給出的 IP 和域名估計都不對，就 ifconfig 查一下服務器內網 IP，然後用指定的端口和它生成的 token 登陸即可（系統環境中配置了密碼按照上面的配置腳本會自動使用這個密碼）。\n123[I 15:10:10.848 NotebookApp] Jupyter Notebook 6.1.1 is running at:[I 15:10:10.848 NotebookApp] http:&#x2F;&#x2F;&lt;machine-name&gt;:12345&#x2F;?token&#x3D;286418550b6a1ff2b767ddaeeb0c1dc2c493e774cbfd3c87[I 15:10:10.848 NotebookApp] or http:&#x2F;&#x2F;127.0.0.1:12345&#x2F;?token&#x3D;286418550b6a1ff2b767ddaeeb0c1dc2c493e774cbfd3c87\n\nVSCode\nVSCode 裝上 Remote 插件可以 SSH 登陸，但是我發現不少地方會在中間做一層跳轉，也就是 SSH 登陸到的只是一台跳轉機而不是真正的服務器，所以這樣就只能用網頁版 VSCode，在真正的服務器啟動 HTTP 服務，然後客戶端通過一個 HTTP 代理連接服務器（通常用跳轉機就會提供這麼一個 Proxy）。VSCode 本身就是基於 electron.js 的，所以搬到 Web 運行很正常。\n下載 code-server 二進制版本：code-server/releases，下載完成解壓縮，然後直接運行 bin/code-server 就會啓動服務並在 ~/.config/code-server/config.yaml 生成一個配置文件：\n1234bind-addr: 127.0.0.1:8080                                                                           auth: passwordpassword: 875b933cf36fcc0d4aff2550cert: false\n\n將配置文件複製到自己目錄下，修改 bind-addr 為 0.0.0.0:${port} 同 Jupyter 一樣開啓遠程登錄和指定端口。修改 password 或使用 export PASSWORD=${password} 配置環境變量都可以修改密碼，或使用 --auth none 參數啓動，關閉驗證。\n安裝插件可以使用 --install-extension ms-python.python 或直接在網頁 VSCode 中正常安裝或下載 .vsix 文件后在左側 Extensions -&gt; Views and More Actions（左上角三個點） -&gt; Install from VSIX…。\n之後指定配置文件啓動 bin/code-server --config /data/vscode_config.yaml。它默認打開 Auto Save，和桌面版有點不一樣，所以默認不顯示 unsaved indicator。\nNot serving HTTPS\n此外，我看到說 1.40 以上已經自帶 Web 版本了，需要從源碼編譯：让 VSCode 在本地 Run 起来。\nBackground 運行\nnohup {cmd} &gt; {logfile.log} 2&gt;&amp;1 &amp; 即可。結束可先通過端口查詢進程 netstat -nlp | grep &lt;port&gt; 然後 kill。\n也可以使用 screen：screen -S ${codeserver} 新建啓動一個新的 screen 會話，在這啓動 code server，ctrl+a+d 退出可回到原 shell 界面，screen -r ${codeserver} 恢復（進入已存在的）screen。\nscreen -ls 列出所有正在運行的 screen：\n1234There are screens on:\t12190.vscode\t(08&#x2F;10&#x2F;2020 10:28:29 AM)\t(Detached)  ...4 Sockets in &#x2F;var&#x2F;run&#x2F;screen&#x2F;S-root.\n\nscreen -X -S {24862} quit 關閉某個 screen。\n1234bind-addr: 127.0.0.1:8080                                                                           auth: passwordpassword: 875b933cf36fcc0d4aff2550cert: false\n\n將配置文件複製到自己目錄下，修改 bind-addr 為 0.0.0.0:${port} 同 Jupyter 一樣開啓遠程登錄和指定端口。修改 password 或使用 export PASSWORD=${password} 配置環境變量都可以修改密碼，或使用 --auth none 參數啓動，關閉驗證。\n安裝插件可以使用 --install-extension ms-python.python 或直接在網頁 VSCode 中正常安裝或下載 .vsix 文件后在左側 Extensions -&gt; Views and More Actions（左上角三個點） -&gt; Install from VSIX…。\n之後指定配置文件啓動 bin/code-server --config /data/vscode_config.yaml。它默認打開 Auto Save，和桌面版有點不一樣，所以默認不顯示 unsaved indicator。\nNot serving HTTPS\n此外，我看到說 1.40 以上已經自帶 Web 版本了，需要從源碼編譯：让 VSCode 在本地 Run 起来。\nBackground 運行\nnohup {cmd} &gt; {logfile.log} 2&gt;&amp;1 &amp; 即可。結束可先通過端口查詢進程 netstat -nlp | grep &lt;port&gt; 然後 kill。\n也可以使用 screen：screen -S ${codeserver} 新建啓動一個新的 screen 會話，在這啓動 code server，ctrl+a+d 退出可回到原 shell 界面，screen -r ${codeserver} 恢復（進入已存在的）screen。\nscreen -ls 列出所有正在運行的 screen：\n1234There are screens on:\t12190.vscode\t(08&#x2F;10&#x2F;2020 10:28:29 AM)\t(Detached)  ...4 Sockets in &#x2F;var&#x2F;run&#x2F;screen&#x2F;S-root.\n\nscreen -X -S {24862} quit 關閉某個 screen。\nDocker簡介：Docker 入門教程 - 阮一峰的网络日志\nhttps://docs.docker.com/get-started/\nhttps://docs.docker.com/engine/reference/commandline/docker/\nImageDocker 把所有所需文件（系統環境、應用程序及依賴）打包在一個 Image 二進制文件中，通過 Image 文件可以創建 Container。他們的關係類似於各種語言中 Class 和 Instance 的關係。打包好的 Image 可以被複製到其它機器中運行，獲得完全相同的運行環境。\nDockerHub\nDockerHub 上有大量已經製作好的 Image 文件，通過 docker pull docker image pull 命令可以抓取文件，例如：\n1docker pull nvidia&#x2F;cuda:9.2-base-ubuntu16.04\n\n就得到一個由 NVIDIA 發佈的，包含 ubuntu 16.04 和 cuda 9.2 環境的 Image。\n使用 docker image ls 或 docker images 可以列出本機所有 Image 文件，使用 docker image rm [imageName] 或 docker rmi [imageName] 刪除。\n12REPOSITORY     TAG                     IMAGE ID        CREATED        SIZEnvidia&#x2F;cuda    9.2-base-ubuntu16.04    460f66f4885a    2 weeks ago    144MB\n\nDockerfile\n通過 Dockerfile 可以自定義地製作一個符合所需的 Image 文件，一個簡單的 Dockerfile 示例如下：\n12345FROM nvidia/cuda:9.2-base-ubuntu16.04RUN apt-get update &amp;&amp; apt-get install -y gitRUN mkdir /appWORKDIR /appCOPY . /app\n\n\nFROM 繼承一個基礎鏡像，\n\nRUN 運行一些 shell 指令，所有結果（對文件的改動）都會打包進 Image 中\n\nWORKDIR 切換當前目錄，相當於 cd\n\nCOPY 把本地的一些文件複製打包進 Image 中指定位置\n\n\ndocker build -t &lt;ImageName&gt;:&lt;Tag&gt; .. . = Dockerfile Path\nExport/Load Image\ndocker save nginx:latest &gt; /root/docker-images/nginx.tar\ndocker load --input /root/docker-images/nginx.tar\nUpload to DockerHub\n首先需要 login docker login -u=[username] (-p=[Password]) [custom dockerhub address]，不帶網址則登陸到官方 Hub。\n可能需要重新 Tag 一下鏡像，docker tag 287b0bcf82c9 nginx:latest，可更改名稱和 Tag。\n最後 docker push [Image]:[Tag]。\nContainer各種方法得到了一個 Image 後，即可創建若干個 Container。\ndocker container run -itd -v $PWD:/workspace -p 8000:3000 --shm-size=1024m --name torch nvidia/cuda:9.2-base-ubuntu16.04 /bin/bash\n\n-it 容器的 Shell 映射到當前 Shell，在當前 Shell 輸入的命令會傳入容器\n\n-d 退出 Shell 後保持後台運行\n\n-v 將本機目錄映射到容器內目錄\n\n-p 容器內的 3000 端口 映射到本機的 8000 端口\n\n--shm-size 指定共享內存的大小，默認的 64M 在 PyTorch 的 DataLoader 中會報錯 RuntimeError: DataLoader worker (pid 1378) is killed by signal: Bus error. It is possible that dataloader&#39;s workers are out of shared memory.\n\n--name 指定 container 名字\n\n/bin/bash 容器啓動後內部第一個執行的命令，啓動 Bash 使得可以使用 Shell\n\n\ndocker container run 會創建一個新的 Container（如果 Image 不存在會自動嘗試 pull），一個 Container 也是一個二進制文件，在 Container 内的任何改動都會保存到這個文件中，Container 退出/停止之後\nctrl+d exit\ndocker ps docker ps -a\n12CONTAINER ID    IMAGE                               COMMAND        CREATED              STATUS                       PORTS           NAMES847442df5cc7    nvidia&#x2F;cuda:9.2-base-ubuntu16.04    &quot;&#x2F;bin&#x2F;bash&quot;    About an hour ago    Exited (0) 45 minutes ago             jovial_mestorf\n\ndocker container start 847442df5cc7 docker attach 847442df5cc7 / docker exec -it 847442df5cc7 /bin/bash，id/name\nctrl+p+q\ndocker container rm [containerID]\n附：Linux 自帶的幾個命令查找移動文件\nfind -name &quot;*.mp4&quot; -exec mv {} ./src \\; 會使用每個查找的結果放在 {} 中單獨執行後面的命令，以 \\; 結尾。\n不過很多命令可直接使用 * 通配，比如 cp mv 不需要額外配合使用 find。\n排除掉某些文件 ls ori/ | grep -v exclude | xargs -i cp -r ori/{} dst/。xargs -i 實現將管道 | 傳遞過來的 stdin 進行處理然後傳遞到命令的參數位置上。\n統計目錄下文件數量 ls -l | grep &quot;^-&quot;| wc -l，配合 ls -lR ls -lR prefix* -l 一行一個列出，grep 選取 - 開頭的（文件） 或 d（目錄），wc -l 統計行數。\n不同機器 SSH 複製\n本地到遠程 scp -r &lt;local_file/dir&gt; remote_username@remote_ip:remote_file/dir，遠程到本地將後面兩個參數反過來。\n壓縮包\ntar -cvf &lt;filename&gt;.tar &lt;dir_path&gt;，c 打包，x 解包，v 詳細信息，f 指定文件。z gz 壓縮，j bz2 (bunzip2) 壓縮，-C &lt;path&gt; 指定解包目錄，如果裡面文件很多可以創建一個目錄給它外面套一层文件夾。\nr 追加，find -name &quot;*.mp4&quot; -exec tar -rvf video.tar {} \\;，每個命令單獨執行的，所以要用追加。不過這裡 tar -rvf video.tar *.mp4 比較直接。u 替換，使用指定文件替換包中同名文件。\nr, u, c, x 選一種模式，f 必須要且在最後；有 gz 後綴加個 z，有 bz2 加 j；v 隨意。\nunzip -d 指定解包目錄，-q 不輸出詳細信息。\nPackage Management\nMiniconda conda config --set auto_activate_base false，在 ~/.condarc 中配置。\napt list --installed\n","dateCreated":"2020-08-18T00:00:00+08:00","dateModified":"2021-09-11T17:34:51+08:00","datePublished":"2020-08-18T00:00:00+08:00","description":"Linux CV 開發基本環境配置，包含一些 Linux 基礎知識，常用工具的安裝和編譯配置，Jupyter 和 VSCode 遠程登陸服務器的配置，等等。","headline":"Linux CV 基本環境配置","image":[],"mainEntityOfPage":{"@type":"WebPage","@id":"https://tangh.github.io/articles/linux-cv-development-env-configuration/"},"publisher":{"@type":"Organization","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg","logo":{"@type":"ImageObject","url":"icon.jpg"}},"url":"https://tangh.github.io/articles/linux-cv-development-env-configuration/","keywords":"Computer Vision, Linux"}</script>
+    <meta name="description" content="Linux CV 開發基本環境配置，包含一些 Linux 基礎知識，常用工具的安裝和編譯配置，Jupyter 和 VSCode 遠程登陸服務器的配置，等等。">
+<meta property="og:type" content="blog">
+<meta property="og:title" content="Linux CV 基本環境配置">
+<meta property="og:url" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;articles&#x2F;linux-cv-development-env-configuration&#x2F;">
+<meta property="og:site_name" content="雨天等放晴">
+<meta property="og:description" content="Linux CV 開發基本環境配置，包含一些 Linux 基礎知識，常用工具的安裝和編譯配置，Jupyter 和 VSCode 遠程登陸服務器的配置，等等。">
+<meta property="og:locale" content="en_US">
+<meta property="article:published_time" content="2020-08-17T16:00:00.000Z">
+<meta property="article:modified_time" content="2021-09-11T09:34:51.127Z">
+<meta property="article:author" content="Tang Huan">
+<meta property="article:tag" content="Jupyter">
+<meta property="article:tag" content="VSCode">
+<meta property="article:tag" content="Cuda">
+<meta property="article:tag" content="Cudnn">
+<meta property="article:tag" content="nccl">
+<meta property="article:tag" content="NVENC">
+<meta property="article:tag" content="FFmpeg">
+<meta property="article:tag" content="OpenCV">
+<meta property="article:tag" content="Docker">
+<meta name="twitter:card" content="summary">
+    
+    
+        
+    
+    
+        <meta property="og:image" content="https://tangh.github.io/assets/images/icon.jpg"/>
+    
+    
+    
+    
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
+    <!--STYLES-->
+    
+<link rel="stylesheet" href="/assets/css/style-iaetwm81hfopcuajcp7qnh2zsnqn4dhiu3nftuj79wdhe7fie6l4r0thrs6g.min.css">
+
+    <!--STYLES END-->
+    
+    <script async src="https://www.googletagmanager.com/gtag/js?id=UA-137837052-1"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'UA-137837052-1');
+    </script><!-- hexo-inject:begin --><!-- hexo-inject:end -->
+
+
+    
+
+</head>
+
+    <body>
+        <!-- hexo-inject:begin --><!-- hexo-inject:end --><div id="blog">
+            <!-- Define author's picture -->
+
+
+    
+        
+            
+        
+    
+
+<header id="header" data-behavior="4">
+    <i id="btn-open-sidebar" class="fa fa-lg fa-bars"></i>
+    <div class="header-title">
+        <a
+            class="header-title-link"
+            href="/"
+            aria-label=""
+        >
+            雨天等放晴
+        </a>
+    </div>
+    
+        
+            <a
+                class="header-right-picture "
+                href="#about"
+                aria-label="Open the link: /#about"
+            >
+        
+        
+            <img class="header-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+        </a>
+    
+</header>
+
+            <!-- Define author's picture -->
+
+
+
+        
+    
+
+<nav id="sidebar" data-behavior="4">
+    <div class="sidebar-container">
+        
+            <div class="sidebar-profile">
+                <a
+                    href="/#about"
+                    aria-label="Read more about the author"
+                >
+                    <img class="sidebar-profile-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+                </a>
+                <h4 class="sidebar-profile-name">Tang Huan</h4>
+                
+                    <h5 class="sidebar-profile-bio"></h5>
+                
+            </div>
+        
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/"
+                            
+                            rel="noopener"
+                            title="Home"
+                        >
+                        <i class="sidebar-button-icon fa fa-home" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Home</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-categories"
+                            
+                            rel="noopener"
+                            title="Categories"
+                        >
+                        <i class="sidebar-button-icon fa fa-bookmark" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Categories</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-tags"
+                            
+                            rel="noopener"
+                            title="Tags"
+                        >
+                        <i class="sidebar-button-icon fa fa-tags" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Tags</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-archives"
+                            
+                            rel="noopener"
+                            title="Archives"
+                        >
+                        <i class="sidebar-button-icon fa fa-archive" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Archives</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/about"
+                            
+                            rel="noopener"
+                            title="About"
+                        >
+                        <i class="sidebar-button-icon fas fa-cube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">About</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://twitter.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Twitter"
+                        >
+                        <i class="sidebar-button-icon fab fa-twitter" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Twitter</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.flickr.com/photos/135277712@N07/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Flickr"
+                        >
+                        <i class="sidebar-button-icon fab fa-flickr" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Flickr</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.instagram.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Instagram"
+                        >
+                        <i class="sidebar-button-icon fab fa-instagram" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Instagram</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="YouTube"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">YouTube</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://space.bilibili.com/634428/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="BiliBili"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube-square" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">BiliBili</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+    </div>
+</nav>
+
+            
+            <div id="main" data-behavior="4"
+                 class="
+                        hasCoverMetaIn
+                        ">
+                
+<article class="post">
+    
+    
+        <div class="post-header main-content-wrap text-center">
+    
+        <h1 class="post-title">
+            Linux CV 基本環境配置
+        </h1>
+    
+    
+        <div class="post-meta">
+    <time datetime="2020-08-18T00:00:00+08:00">
+	
+		    Aug 18, 2020
+    	
+    </time>
+    
+        <span>in </span>
+        
+    <a class="category-link" href="/categories/Computer/">Computer</a>, <a class="category-link" href="/categories/Computer/Programming/">Programming</a>
+
+
+    
+</div>
+
+    
+</div>
+
+    
+    
+        <div class="post-content markdown">
+    
+        <div class="main-content-wrap">
+            <!-- excerpt -->
+
+<p>整理一下關於 Linux 上 CV 開發環境的各種工具的配置。包括各種錯誤的處理，在無 root 權限下安裝到指定目錄，以及多人共用 root 帳戶的情況下重複安裝不同版本且不影響系統中已存在的版本。</p>
+<p><strong>從幾個文件目錄開始</strong></p>
+<p><code>bin</code> 放置可執行的二進制程序，可以直接運行；<code>lib</code> 是一些動態鏈接庫，其它程序依賴；<code>include</code> 則是一些 C 的頭文件，在編譯程序的時候，要 include 進來。</p>
+<p><code>/bin</code>：zsh、ls、rm、mkdir，所有用戶可以使用的與系統相關的程序。<code>/sbin</code>：shutdown、ifconfig、mount，系統運行直接相關的需要 root 權限的程序<br><code>/usr/bin</code>：whereis、tar、clang、g++，系統預裝的程序。<code>/usr/sbin</code> 同樣為需要 root 權限的<br><code>/usr/local/bin</code>：ffmpeg、x264，一些自己安裝的第三方程序。<code>/usr/local/sbin</code> 同理</p>
+<p>此外一些包管理軟件，例如 Homebrew 安裝在 <code>/usr/local/Cellar/</code> 下，並軟鏈接到 <code>/usr/local/bin</code>。一些大型的包管理軟件比如 Anaconda 會安裝在 <code>/usr/local/opt</code> 或 <code>~/opt</code> 下。</p>
+<p><strong>環境変量</strong></p>
+<p>上述這些 bin 文件夾都是默認在 PATH 中的，所以打開 Terminal 直接敲指令就可以使用，不需要帶程序路徑，如果在其它地方的程序，就需要軟鏈接到這裡（<code>/usr/local/bin</code>），或者把其它路徑加到 PATH 中，例如 <code>~/.bashrc</code>/<code>~/.zshrc</code> 內 <code>export PATH=&quot;/Users/kotori/opt/anaconda3/bin:$PATH</code>。</p>
+<p>同樣的，在上述標準的動態鏈接庫 lib 內的 <code>.so</code> 也可以正常被其它需要調用的程序識別到，也可以軟鏈接（到 <code>/usr/local/lib</code>）或 <code>export LD_LIBRARY_PATH=/mnt/x264-master:$LD_LIBRARY_PATH</code>。查看已在環境中的 lib 的位置 <code>ldconfig -p | grep lib</code>。</p>
+<p>如果 head file 不在上述標準的 include 文件夾内，那麽 gcc 編譯的時候就要指定一下 <code>-I</code>。</p>
+<p>例如在 macOS 用 Homebrew 時，如果檢測到系統已經安裝了某程序，那麼它就不會把 <code>/usr/local/Cellar/</code> 內的程序鏈接到 <code>/usr/local/bin</code>，<code>brew info opencv@3</code> 顯示：</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">opencv@3 is keg-only, which means it was not symlinked into &#x2F;usr&#x2F;local, because this is an alternate version of another formula.</span><br><span class="line">&#x2F;usr&#x2F;local&#x2F;Cellar&#x2F;opencv@3&#x2F;3.4.5_6 (656 files, 235.6MB)</span><br></pre></td></tr></table></figure>
+
+<p>這時候如果其它程序編譯需要 Homebrew 的這個版本的 OpenCV 而不是系統内原有的話，就要指定一下 <code>-I/usr/local/Cellar/opencv@3/3.4.5_6/include</code>，<code>-L/usr/local/Cellar/opencv@3/3.4.5_6/lib</code></p>
+<p><strong>多版本共存</strong></p>
+<p>一般軟件編譯后的 <code>sudo make install</code> 就是直接將編譯得到的可執行文件和 lib 複製到 <code>usr/local</code>。如果無 root 權限，或是多人共用 root 而系統内已經有一個別人裝好的，但這個版本/配置不符合要求時，可以不進行 <code>sudo make install</code>，而是統一在：</p>
+<p>在有自己賬戶時，可以在 bashrc 中配置 <code>export XXX</code>，這樣每次登錄時自動把自定義目錄添加到環境變量中。</p>
+<p>多人共用 root 時，可以在 bashrc 中配置一個 <code>alias XXX=export XXX</code>，每次登錄 shell 時敲一下，不影響其他人。</p>
+<p><strong>Conda</strong></p>
+<p>conda 不僅可以管理 python 包（安裝在 <code>miniconda3/envs/&lt;env_name&gt;/lib/python3.x/site-packages</code>），也可以管理其他軟件（bin/lib，例如 Cuda/FFmpeg 等）（安裝在 <code>miniconda3/env/&lt;env_name&gt;/bin</code>）。</p>
+<p><strong>SSH</strong></p>
+<p><code>ssh-keygen -t rsa -C &quot;&lt;comment&gt;&quot;</code> 生成公鑰私鑰，<code>ssh-copy-id -i ~/.ssh/id_rsa.pub root@10.x.x.x</code> 將 public key 寫入到遠程機器的 <code>~/.ssh/authorized_key</code> 文件中，或者（通過其它接口）手動複製進去。</p>
+<h1 id="Cuda"><a href="#Cuda" class="headerlink" title="Cuda"></a>Cuda</h1><p>想要不坑最好還是把 Cuda 更新到很新，在 2020 就是 <code>10.2</code>（目前 <code>11.0</code> 已經發布），可以看一下 PyTorch 它提供的編譯好的版本中 Cuda 最新的是哪個即可。要安裝以下幾個東西：</p>
+<ul>
+<li>顯卡驅動，也就是 <code>nvidia-smi</code> 會顯示的版本。</li>
+</ul>
+<p><a href="https://www.nvidia.com/download/Find.aspx" target="_blank" rel="noopener">https://www.nvidia.com/download/Find.aspx</a> 按 Cuda ToolKit 版本搜索最新，一個 <code>.run</code> 文件（前面一半是個安裝 shell 指令，後面一半是個安裝文件 tar）。</p>
+<ul>
+<li>cuda complier/cuda runtime toolkit，也就是 <code>nvcc -V</code> 會顯示的版本，準確說顯示的是 Runtime API 的版本。我見過 <code>Driver API Version: 9.2, Runtime API Version: 9.0</code> 的機器，一般要求的都是 Runtime API 版本，它是 Driver API 的更高一層抽象，基本全部都是調用的 Runtime API。</li>
+</ul>
+<p><a href="https://developer.nvidia.com/cuda-downloads" target="_blank" rel="noopener">https://developer.nvidia.com/cuda-downloads</a> 在 Legacy Releases 中，有 run/deb/rpm 包，我喜歡用 run 的。</p>
+<ul>
+<li>cudnn，用於深度學習的加速庫 (CUDA Deep Neural Network library)，<code>cat /usr/local/cuda/include/cudnn.h | grep CUDNN_MAJOR -A 2</code> 可查看版本。</li>
+</ul>
+<p><a href="https://developer.nvidia.com/cudnn" target="_blank" rel="noopener">https://developer.nvidia.com/cudnn</a> 要註冊，填一個 survey。有 tar/deb/rpm，它是一個編譯好了的 lib 和一些 head，我喜歡用 tar 然後 <code>cp &amp;&amp; chomod</code> 即可。參考 <a href="https://docs.nvidia.com/deeplearning/cudnn/install-guide/#installlinux-tar" target="_blank" rel="noopener">installlinux-tar</a>。下載時選第一個 <code>cuDNN Library for Linux (x86)</code> 即可，如果得到 <code>solitairetheme8</code> 後綴的文件手動改一下後綴名即可。</p>
+<ul>
+<li>如果有多卡，還需要 nccl，一個多卡之間的通信後端（比如 PyTorch 中的 <code>torch.distributed</code> 中很多方法就是 nccl 的實現）</li>
+</ul>
+<p><a href="https://developer.nvidia.com/nccl/nccl-download" target="_blank" rel="noopener">https://developer.nvidia.com/nccl/nccl-download</a> 同樣要註冊和填一個 survey。只有 Ubuntu/Debian 的 deb 和 RedHat/CentOS 的 rpm，按對應系統選即可。</p>
+<p>由於 Cuda 和 前面的 CPU 工具是並行的存在，所以這些 GPU 相關東西都會裝在 <code>/usr/local/cuda</code> 中，調用 Cuda 的軟件也會自動在這個目錄下查找 bin 和 lib 和 include。在 Windows 下的 cuda 文件夾會自動帶上版本號，因此可以多版本共存。在 Linux 下，Cuda 10.1 update2 之後可以指定安裝目錄。</p>
+<h1 id="FFmpeg-with-nvenc"><a href="#FFmpeg-with-nvenc" class="headerlink" title="FFmpeg with nvenc"></a>FFmpeg with nvenc</h1><p>前幾個月聽說現在 NVENC 效果不錯了，配置了一個試試看，大概 6x 的速度，1.4x 的文件體積？對於不極致質量追求的地方應該說相當好用。官網：<a href="https://developer.nvidia.com/ffmpeg" target="_blank" rel="noopener">developer.nvidia.com</a>，<a href="https://trac.ffmpeg.org/wiki/HWAccelIntro" target="_blank" rel="noopener">trac.ffmpeg.org/wiki/HWAccelIntro</a></p>
+<p>用包管理器的好處就是它真的很貼心，常用的組件通通給配好了。自己編譯的話，每個依賴都要先手動裝好然後在 configure 裡 enable。但是目前包管理器安裝的 FFmpeg 一般都不會帶 GPU 編碼器。</p>
+<p><strong>系統環境</strong></p>
+<p>driver 版本 <code>Driver Version: 396.44</code><br>complier/cuda toolkit 版本 <code>Cuda compilation tools, release 9.0, V9.0.176</code></p>
+<p>這裡有個坑點，<code>nvenc API version</code> 並不知道怎麼查看，而它直接關係到頭文件的版本，我隨便編譯了一個之後運行的時候顯示，這裡才看到是 8.1</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">[h264_nvenc @ 0x36d8640] Driver does not support the required nvenc API version. Required: 10.0 Found: 8.1</span><br><span class="line">[h264_nvenc @ 0x36d8640] The minimum required Nvidia driver for nvenc is 445.87 or newer</span><br></pre></td></tr></table></figure>
+
+<p>然後重新搞了一個，反正也挺快的。。。</p>
+<h2 id="Dependencies"><a href="#Dependencies" class="headerlink" title="Dependencies"></a>Dependencies</h2><p><strong>Compiler</strong></p>
+<p>除了 gcc/g++ 之外，ffmpeg 为了提高效率使用了汇编指令，如 MMX 和 SSE 等，所以先要安裝 yasm，x264 還需要 nasm，否則會報錯 <code>nasm/yasm not found or too old. Use --disable-x86asm for a crippled build.</code></p>
+<p>yasm：Debian 下直接 <code>sudo apt-get install yasm</code>。</p>
+<p>nasm：<a href="http://www.nasm.us/" target="_blank" rel="noopener">www.nasm.us</a>，下載後直接運行 <code>./configure</code>，尋找編譯器並生成相應 Makefile，然後 <code>make</code> 編譯，之後 <code>make install</code> 裝進 <code>/usr/local/bin</code>。</p>
+<p><strong>x264</strong></p>
+<p>我怎麼覺得 libavcodec 就帶了 x264 編解碼啊？但是實踐告訴我 <code>Unknown encoder &#39;libx264&#39;</code> 就是要單獨搞搞。</p>
+<p>總還是會用到 CPU 編碼，所以 <code>git clone https://code.videolan.org/videolan/x264.git</code> 得到源碼後，<code>./configure --enable-static --enable-shared</code>，然後 <code>make</code> -&gt; <code>sudo make install</code> 給它編譯安裝。</p>
+<p>這會生成 <code>.a</code> (Archive libraries ) 靜態編譯的程序會用到，和 <code>.so</code> (shared object) 的<a href="https://en.wikipedia.org/wiki/Library_(computing)#Dynamic_linking" target="_blank" rel="noopener">動態庫</a>。</p>
+<p><strong>libmp3lame</strong></p>
+<p>一個 mp3 的編碼器，總之 FFmpeg 啥都要自己配好才工作，<code>apt-get install libmp3lame-dev</code> 或者與 x264 一樣的安裝方式。它好像也可以 AAC，我試了下是 OK 的？</p>
+<p><strong>Head File</strong></p>
+<p>然後 clone 一下頭文件 <code>https://github.com/FFmpeg/nv-codec-headers</code>，這裡知道系統裡的 API 是 8.1 的（上面那個系統環境版本簡直太「經典」了），所以 <code>git checkout -b sdk/8.1 origin/sdk/8.1</code> 把老版本的拉下來。<code>cd nv-codec-headers &amp;&amp; sudo make install &amp;&amp; cd –</code> 編譯。</p>
+<h2 id="Compile-and-Command"><a href="#Compile-and-Command" class="headerlink" title="Compile and Command"></a>Compile and Command</h2><p>把 FFmpeg clone 下來，然後配置啟動一下 x264、libmp3lame、nvenc，cuda 不在標準目錄要指定一下 <code>-I</code> 和 <code>-L</code></p>
+<p><code>./configure --enable-cuda-nvcc --enable-cuvid --enable-nvenc --enable-nonfree --enable-libnpp --enable-gpl --enable-libx264 --enable-libmp3lame --extra-cflags=-I/usr/local/cuda/include --extra-ldflags=-L/usr/local/cuda/lib64</code></p>
+<p>生成 Makefile 後，<code>make -j 10</code> -&gt; <code>make install</code></p>
+<p>我這裡碰到奇怪情況，明明都 <code>make install</code> 了，但是好像沒在環境変量裡，而且 x264 也是，運行會顯示：<code>./ffmpeg: error while loading shared libraries: libx264.so.161: cannot open shared object file: No such file or directory</code></p>
+<p><code>ldd ./ffmpeg</code> 看了下，顯示以下：</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">linux-vdso.so.1 (0x00007fff12dac000)</span><br><span class="line">  ...</span><br><span class="line">  liblzma.so.5 &#x3D;&gt; &#x2F;lib&#x2F;x86_64-linux-gnu&#x2F;liblzma.so.5 (0x00007f52f5bcf000)</span><br><span class="line">  libx264.so.161 &#x3D;&gt; not found</span><br><span class="line">  libpthread.so.0 &#x3D;&gt; &#x2F;lib&#x2F;x86_64-linux-gnu&#x2F;libpthread.so.0 (0x00007f52f59b2000)</span><br><span class="line">  ...</span><br></pre></td></tr></table></figure>
+
+<p><code>/usr/local/lib</code> 裡明明有個 <code>libx264.so</code> soft link -&gt; <code>libx264.so.161</code>，不知道它為啥要找帶版本號後綴的。有說 <code>/etc/ld.so.conf</code> 加上 x264 clone 到的目錄然後 <code>sudo ldconfig</code>。感覺不如直接 <code>export LD_LIBRARY_PATH=/mnt/x264-master:$LD_LIBRARY_PATH</code>，然後把 FFmpeg 也 export 到 PATH 裡。</p>
+<p><strong>command</strong></p>
+<p><code>ffmpeg -hwaccel cuvid -hwaccel_output_format cuda (-c:v h264_cuvid) -i a.avi -i b.mp4 -map 0:0 -map 1:1 -c:v h264_nvenc -c:a copy -y c.mp4</code></p>
+<p>啟用 GPU 編解碼，加上解碼也有不小速度提升，source 不是 h.264 的也有提升（去掉括號內的）。</p>
+<h2 id="FFmpeg-Static-Builds"><a href="#FFmpeg-Static-Builds" class="headerlink" title="FFmpeg Static Builds"></a>FFmpeg Static Builds</h2><p>官網上發現有個 <a href="https://johnvansickle.com/ffmpeg/" target="_blank" rel="noopener">static build</a>，不用 GPU 的話不如直接用這玩意方便，什麼都帶。</p>
+<h1 id="一鍵安裝腳本"><a href="#一鍵安裝腳本" class="headerlink" title="一鍵安裝腳本"></a>一鍵安裝腳本</h1><p><a href="https://github.com/innerlee/setup" target="_blank" rel="noopener">innerlee/setup</a> 這個 repo 提供了常用軟件的安裝腳本。</p>
+<p>配置環境變量</p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">export</span> ZZROOT=<span class="variable">$&#123;some path&#125;</span>/app</span><br><span class="line"><span class="built_in">export</span> PATH=<span class="variable">$ZZROOT</span>/bin:<span class="variable">$PATH</span></span><br><span class="line"><span class="built_in">export</span> LD_LIBRARY_PATH=<span class="variable">$ZZROOT</span>/lib:<span class="variable">$ZZROOT</span>/lib64:<span class="variable">$LD_LIBRARY_PATH</span></span><br></pre></td></tr></table></figure>
+
+<p>所有腳本會把 <code>downloads</code>，解壓到 <code>src</code>，然後編譯並安裝到 <code>bin</code> 或 <code>lib</code>。<code>DCMAKE_INSTALL_PREFIX=$ZZROOT</code> 和其它一系列 FLAGS。</p>
+<p>make DESTDIR=/home/john install</p>
+<h2 id="TroubleShoot"><a href="#TroubleShoot" class="headerlink" title="TroubleShoot"></a>TroubleShoot</h2><p>對於 CMake 中需要下載的一些網絡資源，例如儲存在 GitHub 上，以 OpenCV 為例。</p>
+<p>在 <a href="https://github.com/opencv/opencv/blob/master/3rdparty/ippicv/ippicv.cmake" target="_blank" rel="noopener">opencv/3rdparty/ippicv</a> 中會下載 ～60 MB 的 ippicv，在 <a href="https://github.com/opencv/opencv_contrib/tree/master/modules/xfeatures2d/cmake" target="_blank" rel="noopener">opencv_contrib/modules/xfeatures2d</a> 中會下載 boostdesc_binboost 和 vgg_generated。這些二進制文件都在 <a href="https://github.com/opencv/opencv_3rdparty" target="_blank" rel="noopener">opencv_3rdparty</a> repo 不同的 branch 中，可以看一下 <code>.cmake</code> 文件中的 SHA，例如 <code>set(IPPICV_COMMIT &quot;a56b6ac6f030c312b2dce17430eef13aed9af274&quot;)</code>，再找到對應的 branch（一般就是最新的，檢查一下 <code>iigalanin Update IPPICV binaries (20191018)    a56b6ac on Feb 25</code>）。</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">set(IPPICV_COMMIT &quot;a56b6ac6f030c312b2dce17430eef13aed9af274&quot;)</span><br><span class="line"></span><br><span class="line">&quot;$&#123;OPENCV_IPPICV_URL&#125;&quot;</span><br><span class="line">                &quot;$ENV&#123;OPENCV_IPPICV_URL&#125;&quot;</span><br><span class="line">                &quot;https:&#x2F;&#x2F;raw.githubusercontent.com&#x2F;opencv&#x2F;opencv_3rdparty&#x2F;$&#123;IPPICV_COMMIT&#125;&#x2F;ippicv&#x2F;&quot;</span><br><span class="line"></span><br><span class="line">if(X86_64)</span><br><span class="line">  set(OPENCV_ICV_NAME &quot;ippicv_2019_lnx_intel64_general_20180723.tgz&quot;)</span><br><span class="line">  set(OPENCV_ICV_HASH &quot;c0bd78adb4156bbf552c1dfe90599607&quot;)</span><br></pre></td></tr></table></figure>
+
+<p>拼接 <code>https://raw.githubusercontent.com/opencv/opencv_3rdparty/32e315a5b106a7b89dbed51c28f8120a48b368b4/ippicv/ippicv_2019_lnx_intel64_general_20180723.tgz</code></p>
+<p>以 ippicv 爲例，牆内一般卡在 <code>IPPICV: Download: ippicv_2019_lnx_intel64_general_20180723.tgz</code> 然後超時。</p>
+<p>把這些用代理下載好後，放到例如 <code>$ZZROOT/app/3rdparty</code> 中，然後修改對應 cmake 文件中的</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">ocv_download(FILENAME $&#123;OPENCV_ICV_NAME&#125;</span><br><span class="line">             HASH $&#123;OPENCV_ICV_HASH&#125;</span><br><span class="line">             URL</span><br><span class="line">               &quot;$&#123;OPENCV_IPPICV_URL&#125;&quot;</span><br><span class="line">               &quot;$ENV&#123;OPENCV_IPPICV_URL&#125;&quot;</span><br><span class="line">               &quot;https:&#x2F;&#x2F;raw.githubusercontent.com&#x2F;opencv&#x2F;opencv_3rdparty&#x2F;$&#123;IPPICV_COMMIT&#125;&#x2F;ippicv&#x2F;&quot;</span><br><span class="line">             DESTINATION_DIR &quot;$&#123;THE_ROOT&#125;&quot;</span><br><span class="line">             ID IPPICV</span><br><span class="line">             STATUS res</span><br><span class="line">             UNPACK RELATIVE_URL)</span><br></pre></td></tr></table></figure>
+
+<p><code>&quot;https://raw.githubusercontent.com/opencv/opencv_3rdparty/${IPPICV_COMMIT}/ippicv/&quot;</code> 修改為 <code>&quot;file:///data/app/3rdparty &quot;</code></p>
+<p>還要 comment 一下腳本中把 tar 解壓到 src 的步驟。</p>
+<p><strong>OpenCV</strong></p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">CMakeFiles&#x2F;Makefile2:4315: recipe for target &#39;modules&#x2F;videoio&#x2F;CMakeFiles&#x2F;opencv_videoio.dir&#x2F;all&#39; failed</span><br><span class="line">make: *** [all] Error 2</span><br></pre></td></tr></table></figure>
+
+<p>videoio 一般是 FFmpeg 錯誤，沒有配置好 share 或者沒有把路徑添加到環境變量。</p>
+<h1 id="Jupyter-and-VSCode"><a href="#Jupyter-and-VSCode" class="headerlink" title="Jupyter and VSCode"></a>Jupyter and VSCode</h1><p>Jupyter 和 VSCode 可以遠程連接到服務器作業，然後保存直接更改到服務器上。Jupyter 是啟動了一個 http 服務，然後在網頁上進行編輯，原生 VSCode 用的是 SSH。不管怎樣都是比 Vim 方便。Jupyter 上傳下載文件方便一點，不需要 SFTP 了。VSCode 帶了 Terminal，且有自動補全，各種都好用。</p>
+<p><strong>Jupyter</strong></p>
+<p>在網上看了一圈，發現都是莫名奇妙的配置方法，麻煩且，我感覺就多人共用一個 root 還是挺常見的吧，直接命令生成新的配置覆蓋不好吧。。其實它可以指定配置文件啟動。把底下的祖傳配置腳本隨便放到哪，然後 <code>jupyter notebook --allow-root -y --ip=0.0.0.0 --config=&quot;&lt;path&gt;/jupyter_notebook_config.py&quot;</code> 就好。其實只要有 <code>--ip=0.0.0.0</code> 都不需要後面的 config 它就會啟動一個可以遠程登陸的 kernel，這個 ip 默認是 localhost，寫 0 自動用本機 IP，端口 <code>8888</code>。下面的 config 主要是自定義一個端口和打開 Jupyter 之後的工作目錄，以及獲取環境變量中的 password。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> os</span><br><span class="line"><span class="keyword">from</span> IPython.lib <span class="keyword">import</span> passwd</span><br><span class="line"></span><br><span class="line">c = get_config()</span><br><span class="line"><span class="comment"># default is `localhost`, set to `0.0.0.0` to enable remote login</span></span><br><span class="line">c.NotebookApp.ip = <span class="string">'0.0.0.0'</span></span><br><span class="line"><span class="comment"># set an unique port</span></span><br><span class="line">c.NotebookApp.port = int(os.getenv(<span class="string">'PORT'</span>, <span class="number">12345</span>))</span><br><span class="line">c.NotebookApp.open_browser = <span class="literal">False</span></span><br><span class="line"><span class="comment"># set jupyter workspace dir</span></span><br><span class="line">c.NotebookApp.notebook_dir = <span class="string">"/data/kotori/workspace"</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># sets a password if PASSWORD is set in the environment</span></span><br><span class="line"><span class="comment"># otherwise generate a login token</span></span><br><span class="line"><span class="keyword">if</span> <span class="string">'PASSWORD'</span> <span class="keyword">in</span> os.environ:</span><br><span class="line">  password = os.environ[<span class="string">'PASSWORD'</span>]</span><br><span class="line">  <span class="keyword">if</span> password:</span><br><span class="line">    c.NotebookApp.password = passwd(password)</span><br><span class="line">  <span class="keyword">else</span>:</span><br><span class="line">    c.NotebookApp.password = <span class="string">''</span></span><br><span class="line">    c.NotebookApp.token = <span class="string">''</span></span><br><span class="line">  <span class="comment"># del os.environ['PASSWORD']</span></span><br></pre></td></tr></table></figure>
+
+<p>運行之後會顯示下面的，它給出的 IP 和域名估計都不對，就 <code>ifconfig</code> 查一下服務器內網 IP，然後用指定的端口和它生成的 token 登陸即可（系統環境中配置了密碼按照上面的配置腳本會自動使用這個密碼）。</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">[I 15:10:10.848 NotebookApp] Jupyter Notebook 6.1.1 is running at:</span><br><span class="line">[I 15:10:10.848 NotebookApp] http:&#x2F;&#x2F;&lt;machine-name&gt;:12345&#x2F;?token&#x3D;286418550b6a1ff2b767ddaeeb0c1dc2c493e774cbfd3c87</span><br><span class="line">[I 15:10:10.848 NotebookApp] or http:&#x2F;&#x2F;127.0.0.1:12345&#x2F;?token&#x3D;286418550b6a1ff2b767ddaeeb0c1dc2c493e774cbfd3c87</span><br></pre></td></tr></table></figure>
+
+<p><strong>VSCode</strong></p>
+<p>VSCode 裝上 Remote 插件可以 SSH 登陸，但是我發現不少地方會在中間做一層跳轉，也就是 SSH 登陸到的只是一台跳轉機而不是真正的服務器，所以這樣就只能用網頁版 VSCode，在真正的服務器啟動 HTTP 服務，然後客戶端通過一個 HTTP 代理連接服務器（通常用跳轉機就會提供這麼一個 Proxy）。VSCode 本身就是基於 electron.js 的，所以搬到 Web 運行很正常。</p>
+<p>下載 code-server 二進制版本：<a href="https://github.com/cdr/code-server/releases" target="_blank" rel="noopener">code-server/releases</a>，下載完成解壓縮，然後直接運行 <code>bin/code-server</code> 就會啓動服務並在 <code>~/.config/code-server/config.yaml</code> 生成一個配置文件：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">bind-addr:</span> <span class="number">127.0</span><span class="number">.0</span><span class="number">.1</span><span class="string">:8080</span>                                                                           </span><br><span class="line"><span class="attr">auth:</span> <span class="string">password</span></span><br><span class="line"><span class="attr">password:</span> <span class="string">875b933cf36fcc0d4aff2550</span></span><br><span class="line"><span class="attr">cert:</span> <span class="literal">false</span></span><br></pre></td></tr></table></figure>
+
+<p>將配置文件複製到自己目錄下，修改 <code>bind-addr</code> 為 <code>0.0.0.0:${port}</code> 同 Jupyter 一樣開啓遠程登錄和指定端口。修改 <code>password</code> 或使用 <code>export PASSWORD=${password}</code> 配置環境變量都可以修改密碼，或使用 <code>--auth none</code> 參數啓動，關閉驗證。</p>
+<p>安裝插件可以使用 <code>--install-extension ms-python.python</code> 或直接在網頁 VSCode 中正常安裝或下載 <code>.vsix</code> 文件后在左側 Extensions -&gt; Views and More Actions（左上角三個點） -&gt; Install from VSIX…。</p>
+<p>之後指定配置文件啓動 <code>bin/code-server --config /data/vscode_config.yaml</code>。它默認打開 Auto Save，和桌面版有點不一樣，所以默認不顯示 unsaved indicator。</p>
+<p>Not serving HTTPS</p>
+<p>此外，我看到說 1.40 以上已經自帶 Web 版本了，需要從源碼編譯：<a href="https://www.barretlee.com/blog/2019/10/23/vscode-study-01-start/" target="_blank" rel="noopener">让 VSCode 在本地 Run 起来</a>。</p>
+<p><strong>Background 運行</strong></p>
+<p><code>nohup {cmd} &gt; {logfile.log} 2&gt;&amp;1 &amp;</code> 即可。結束可先通過端口查詢進程 <code>netstat -nlp | grep &lt;port&gt;</code> 然後 <code>kill</code>。</p>
+<p>也可以使用 screen：<code>screen -S ${codeserver}</code> 新建啓動一個新的 screen 會話，在這啓動 code server，<code>ctrl+a+d</code> 退出可回到原 shell 界面，<code>screen -r ${codeserver}</code> 恢復（進入已存在的）screen。</p>
+<p><code>screen -ls</code> 列出所有正在運行的 screen：</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">There are screens on:</span><br><span class="line">	12190.vscode	(08&#x2F;10&#x2F;2020 10:28:29 AM)	(Detached)</span><br><span class="line">  ...</span><br><span class="line">4 Sockets in &#x2F;var&#x2F;run&#x2F;screen&#x2F;S-root.</span><br></pre></td></tr></table></figure>
+
+<p><code>screen -X -S {24862} quit</code> 關閉某個 screen。</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">bind-addr:</span> <span class="number">127.0</span><span class="number">.0</span><span class="number">.1</span><span class="string">:8080</span>                                                                           </span><br><span class="line"><span class="attr">auth:</span> <span class="string">password</span></span><br><span class="line"><span class="attr">password:</span> <span class="string">875b933cf36fcc0d4aff2550</span></span><br><span class="line"><span class="attr">cert:</span> <span class="literal">false</span></span><br></pre></td></tr></table></figure>
+
+<p>將配置文件複製到自己目錄下，修改 <code>bind-addr</code> 為 <code>0.0.0.0:${port}</code> 同 Jupyter 一樣開啓遠程登錄和指定端口。修改 <code>password</code> 或使用 <code>export PASSWORD=${password}</code> 配置環境變量都可以修改密碼，或使用 <code>--auth none</code> 參數啓動，關閉驗證。</p>
+<p>安裝插件可以使用 <code>--install-extension ms-python.python</code> 或直接在網頁 VSCode 中正常安裝或下載 <code>.vsix</code> 文件后在左側 Extensions -&gt; Views and More Actions（左上角三個點） -&gt; Install from VSIX…。</p>
+<p>之後指定配置文件啓動 <code>bin/code-server --config /data/vscode_config.yaml</code>。它默認打開 Auto Save，和桌面版有點不一樣，所以默認不顯示 unsaved indicator。</p>
+<p>Not serving HTTPS</p>
+<p>此外，我看到說 1.40 以上已經自帶 Web 版本了，需要從源碼編譯：<a href="https://www.barretlee.com/blog/2019/10/23/vscode-study-01-start/" target="_blank" rel="noopener">让 VSCode 在本地 Run 起来</a>。</p>
+<p><strong>Background 運行</strong></p>
+<p><code>nohup {cmd} &gt; {logfile.log} 2&gt;&amp;1 &amp;</code> 即可。結束可先通過端口查詢進程 <code>netstat -nlp | grep &lt;port&gt;</code> 然後 <code>kill</code>。</p>
+<p>也可以使用 screen：<code>screen -S ${codeserver}</code> 新建啓動一個新的 screen 會話，在這啓動 code server，<code>ctrl+a+d</code> 退出可回到原 shell 界面，<code>screen -r ${codeserver}</code> 恢復（進入已存在的）screen。</p>
+<p><code>screen -ls</code> 列出所有正在運行的 screen：</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">There are screens on:</span><br><span class="line">	12190.vscode	(08&#x2F;10&#x2F;2020 10:28:29 AM)	(Detached)</span><br><span class="line">  ...</span><br><span class="line">4 Sockets in &#x2F;var&#x2F;run&#x2F;screen&#x2F;S-root.</span><br></pre></td></tr></table></figure>
+
+<p><code>screen -X -S {24862} quit</code> 關閉某個 screen。</p>
+<h1 id="Docker"><a href="#Docker" class="headerlink" title="Docker"></a>Docker</h1><p>簡介：<a href="http://www.ruanyifeng.com/blog/2018/02/docker-tutorial.html" target="_blank" rel="noopener">Docker 入門教程 - 阮一峰的网络日志</a></p>
+<p><a href="https://docs.docker.com/get-started/" target="_blank" rel="noopener">https://docs.docker.com/get-started/</a></p>
+<p><a href="https://docs.docker.com/engine/reference/commandline/docker/" target="_blank" rel="noopener">https://docs.docker.com/engine/reference/commandline/docker/</a></p>
+<h2 id="Image"><a href="#Image" class="headerlink" title="Image"></a>Image</h2><p>Docker 把所有所需文件（系統環境、應用程序及依賴）打包在一個 Image 二進制文件中，通過 Image 文件可以創建 Container。他們的關係類似於各種語言中 Class 和 Instance 的關係。打包好的 Image 可以被複製到其它機器中運行，獲得完全相同的運行環境。</p>
+<p><strong>DockerHub</strong></p>
+<p>DockerHub 上有大量已經製作好的 Image 文件，通過 <code>docker pull</code> <code>docker image pull</code> 命令可以抓取文件，例如：</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">docker pull nvidia&#x2F;cuda:9.2-base-ubuntu16.04</span><br></pre></td></tr></table></figure>
+
+<p>就得到一個由 <code>NVIDIA</code> 發佈的，包含 ubuntu 16.04 和 cuda 9.2 環境的 Image。</p>
+<p>使用 <code>docker image ls</code> 或 <code>docker images</code> 可以列出本機所有 Image 文件，使用 <code>docker image rm [imageName]</code> 或 <code>docker rmi [imageName]</code> 刪除。</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">REPOSITORY     TAG                     IMAGE ID        CREATED        SIZE</span><br><span class="line">nvidia&#x2F;cuda    9.2-base-ubuntu16.04    460f66f4885a    2 weeks ago    144MB</span><br></pre></td></tr></table></figure>
+
+<p><strong>Dockerfile</strong></p>
+<p>通過 Dockerfile 可以自定義地製作一個符合所需的 Image 文件，一個簡單的 Dockerfile 示例如下：</p>
+<figure class="highlight dockerfile"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">FROM</span> nvidia/cuda:<span class="number">9.2</span>-base-ubuntu16.<span class="number">04</span></span><br><span class="line"><span class="keyword">RUN</span><span class="bash"> apt-get update &amp;&amp; apt-get install -y git</span></span><br><span class="line"><span class="keyword">RUN</span><span class="bash"> mkdir /app</span></span><br><span class="line"><span class="keyword">WORKDIR</span><span class="bash"> /app</span></span><br><span class="line"><span class="keyword">COPY</span><span class="bash"> . /app</span></span><br></pre></td></tr></table></figure>
+
+<ul>
+<li><p><code>FROM</code> 繼承一個基礎鏡像，</p>
+</li>
+<li><p><code>RUN</code> 運行一些 shell 指令，所有結果（對文件的改動）都會打包進 Image 中</p>
+</li>
+<li><p><code>WORKDIR</code> 切換當前目錄，相當於 <code>cd</code></p>
+</li>
+<li><p><code>COPY</code> 把本地的一些文件複製打包進 Image 中指定位置</p>
+</li>
+</ul>
+<p><code>docker build -t &lt;ImageName&gt;:&lt;Tag&gt; .</code>. <code>.</code> = Dockerfile Path</p>
+<p><strong>Export/Load Image</strong></p>
+<p><code>docker save nginx:latest &gt; /root/docker-images/nginx.tar</code></p>
+<p><code>docker load --input /root/docker-images/nginx.tar</code></p>
+<p><strong>Upload to DockerHub</strong></p>
+<p>首先需要 login <code>docker login -u=[username] (-p=[Password]) [custom dockerhub address]</code>，不帶網址則登陸到官方 Hub。</p>
+<p>可能需要重新 Tag 一下鏡像，<code>docker tag 287b0bcf82c9 nginx:latest</code>，可更改名稱和 Tag。</p>
+<p>最後 <code>docker push [Image]:[Tag]</code>。</p>
+<h2 id="Container"><a href="#Container" class="headerlink" title="Container"></a>Container</h2><p>各種方法得到了一個 Image 後，即可創建若干個 Container。</p>
+<p><code>docker container run -itd -v $PWD:/workspace -p 8000:3000 --shm-size=1024m --name torch nvidia/cuda:9.2-base-ubuntu16.04 /bin/bash</code></p>
+<ul>
+<li><p><code>-it</code> 容器的 Shell 映射到當前 Shell，在當前 Shell 輸入的命令會傳入容器</p>
+</li>
+<li><p><code>-d</code> 退出 Shell 後保持後台運行</p>
+</li>
+<li><p><code>-v</code> 將本機目錄映射到容器內目錄</p>
+</li>
+<li><p><code>-p</code> 容器內的 <code>3000</code> 端口 映射到本機的 <code>8000</code> 端口</p>
+</li>
+<li><p><code>--shm-size</code> 指定共享內存的大小，默認的 64M 在 PyTorch 的 DataLoader 中會報錯 <code>RuntimeError: DataLoader worker (pid 1378) is killed by signal: Bus error. It is possible that dataloader&#39;s workers are out of shared memory.</code></p>
+</li>
+<li><p><code>--name</code> 指定 container 名字</p>
+</li>
+<li><p><code>/bin/bash</code> 容器啓動後內部第一個執行的命令，啓動 Bash 使得可以使用 Shell</p>
+</li>
+</ul>
+<p><code>docker container run</code> 會創建一個新的 Container（如果 Image 不存在會自動嘗試 <code>pull</code>），一個 Container 也是一個二進制文件，在 Container 内的任何改動都會保存到這個文件中，Container 退出/停止之後</p>
+<p><code>ctrl+d</code> <code>exit</code></p>
+<p><code>docker ps</code> <code>docker ps -a</code></p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">CONTAINER ID    IMAGE                               COMMAND        CREATED              STATUS                       PORTS           NAMES</span><br><span class="line">847442df5cc7    nvidia&#x2F;cuda:9.2-base-ubuntu16.04    &quot;&#x2F;bin&#x2F;bash&quot;    About an hour ago    Exited (0) 45 minutes ago             jovial_mestorf</span><br></pre></td></tr></table></figure>
+
+<p><code>docker container start 847442df5cc7</code> <code>docker attach 847442df5cc7</code> / <code>docker exec -it 847442df5cc7 /bin/bash</code>，id/name</p>
+<p><code>ctrl+p+q</code></p>
+<p><code>docker container rm [containerID]</code></p>
+<h1 id="附：Linux-自帶的幾個命令"><a href="#附：Linux-自帶的幾個命令" class="headerlink" title="附：Linux 自帶的幾個命令"></a>附：Linux 自帶的幾個命令</h1><p><strong>查找移動文件</strong></p>
+<p><code>find -name &quot;*.mp4&quot; -exec mv {} ./src \;</code> 會使用每個查找的結果放在 <code>{}</code> 中單獨執行後面的命令，以 <code>\;</code> 結尾。</p>
+<p>不過很多命令可直接使用 <code>*</code> 通配，比如 <code>cp</code> <code>mv</code> 不需要額外配合使用 <code>find</code>。</p>
+<p>排除掉某些文件 <code>ls ori/ | grep -v exclude | xargs -i cp -r ori/{} dst/</code>。<code>xargs -i</code> 實現將管道 <code>|</code> 傳遞過來的 stdin 進行處理然後傳遞到命令的參數位置上。</p>
+<p>統計目錄下文件數量 <code>ls -l | grep &quot;^-&quot;| wc -l</code>，配合 <code>ls -lR</code> <code>ls -lR prefix*</code> <code>-l</code> 一行一個列出，<code>grep</code> 選取 <code>-</code> 開頭的（文件） 或 <code>d</code>（目錄），<code>wc -l</code> 統計行數。</p>
+<p><strong>不同機器 SSH 複製</strong></p>
+<p>本地到遠程 <code>scp -r &lt;local_file/dir&gt; remote_username@remote_ip:remote_file/dir</code>，遠程到本地將後面兩個參數反過來。</p>
+<p><strong>壓縮包</strong></p>
+<p><code>tar -cvf &lt;filename&gt;.tar &lt;dir_path&gt;</code>，<code>c</code> 打包，<code>x</code> 解包，<code>v</code> 詳細信息，<code>f</code> 指定文件。<code>z</code> gz 壓縮，<code>j</code> bz2 (bunzip2) 壓縮，<code>-C &lt;path&gt;</code> 指定解包目錄，如果裡面文件很多可以創建一個目錄給它外面套一层文件夾。</p>
+<p><code>r</code> 追加，<code>find -name &quot;*.mp4&quot; -exec tar -rvf video.tar {} \;</code>，每個命令單獨執行的，所以要用追加。不過這裡 <code>tar -rvf video.tar *.mp4</code> 比較直接。<code>u</code> 替換，使用指定文件替換包中同名文件。</p>
+<p><code>r, u, c, x</code> 選一種模式，<code>f</code> 必須要且在最後；有 gz 後綴加個 <code>z</code>，有 bz2 加 <code>j</code>；<code>v</code> 隨意。</p>
+<p><code>unzip</code> <code>-d</code> 指定解包目錄，<code>-q</code> 不輸出詳細信息。</p>
+<p><strong>Package Management</strong></p>
+<p>Miniconda <code>conda config --set auto_activate_base false</code>，在 <code>~/.condarc</code> 中配置。</p>
+<p><code>apt list --installed</code></p>
+<br/>
+            
+
+
+        </div>
+    </div>
+    <div id="post-footer" class="post-footer main-content-wrap">
+        
+            <div class="post-footer-tags">
+                <span class="text-color-light text-small">TAGGED IN</span><br/>
+                
+    <a class="tag tag--primary tag--small t-link" href="/tags/Computer-Vision/" rel="tag">Computer Vision</a> <a class="tag tag--primary tag--small t-link" href="/tags/Linux/" rel="tag">Linux</a>
+
+            </div>
+        
+        
+            <div class="post-actions-wrap">
+    <nav>
+        <ul class="post-actions post-action-nav">
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/multi-gpu-and-mix-precision-in-pytorch/"
+                    data-tooltip="PyTorch 中多卡及混合精度使用方法"
+                    aria-label="PREVIOUS: PyTorch 中多卡及混合精度使用方法"
+                >
+                    
+                        <i class="fa fa-angle-left" aria-hidden="true"></i>
+                        <span class="hide-xs hide-sm text-small icon-ml">PREVIOUS</span>
+                    </a>
+            </li>
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/create-high-quality-live-photos/"
+                    data-tooltip="生成高質量的 Live Photo 的方法"
+                    aria-label="NEXT: 生成高質量的 Live Photo 的方法"
+                >
+                    
+                        <span class="hide-xs hide-sm text-small icon-mr">NEXT</span>
+                        <i class="fa fa-angle-right" aria-hidden="true"></i>
+                    </a>
+            </li>
+        </ul>
+    </nav>
+    <ul class="post-actions post-action-share">
+        <li class="post-action hide-lg hide-md hide-sm">
+            <a
+                class="post-action-btn btn btn--default btn-open-shareoptions"
+                href="#btn-open-shareoptions"
+                aria-label="Share this post"
+            >
+                <i class="fa fa-share-alt" aria-hidden="true"></i>
+            </a>
+        </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/linux-cv-development-env-configuration/"
+                    title="Share on Facebook"
+                    aria-label="Share on Facebook"
+                >
+                    <i class="fab fa-facebook" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/linux-cv-development-env-configuration/"
+                    title="Share on Twitter"
+                    aria-label="Share on Twitter"
+                >
+                    <i class="fab fa-twitter" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/linux-cv-development-env-configuration/"
+                    title="Share on Weibo"
+                    aria-label="Share on Weibo"
+                >
+                    <i class="fab fa-weibo" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/linux-cv-development-env-configuration/&amp;title=Linux CV 基本環境配置"
+                    title="Share on QQ"
+                    aria-label="Share on QQ"
+                >
+                    <i class="fab fa-qq" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+        
+            
+                <li class="post-action">
+                    <a
+                        class="post-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                        <i class="fa fa-comment"></i>
+                    </a>
+                </li>
+            
+        
+        <li class="post-action">
+            
+                <a class="post-action-btn btn btn--default" href="#" aria-label="Back to top">
+            
+                <i class="fa fa-list" aria-hidden="true"></i>
+            </a>
+        </li>
+    </ul>
+</div>
+
+
+        
+        
+            
+                <div id="gitalk"></div>
+
+            
+        
+    </div>
+</article>
+
+
+
+                <footer id="footer" class="main-content-wrap">
+    <span class="copyrights">
+        Copyrights &copy; 2021 Tang Huan. All Rights Reserved.
+    </span>
+</footer>
+
+            </div>
+            
+                <div id="bottom-bar" class="post-bottom-bar" data-behavior="4">
+                    <div class="post-bar-actions-wrap">
+    <div class="post-actions post-action-share">
+        <div class="post-action">
+            
+                <a class="post-bar-action-btn btn btn--default" href="#" aria-label="Back to top">
+            
+                <i class="fas fa-angle-up" aria-hidden="true"></i>
+            </a>
+        </div>
+        
+            
+                <div class="post-action">
+                    <a 
+                        class="post-bar-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                         <i class="fas fa-angle-down"></i>
+                    </a>
+                </div>
+            
+        
+    </div>
+</div>
+                </div>
+                
+    <div id="share-options-bar" class="share-options-bar" data-behavior="4">
+        <i id="btn-close-shareoptions" class="fa fa-times"></i>
+        <ul class="share-options">
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/linux-cv-development-env-configuration/"
+                        aria-label="Share on Facebook"
+                    >
+                        <i class="fab fa-facebook" aria-hidden="true"></i><span>Share on Facebook</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/linux-cv-development-env-configuration/"
+                        aria-label="Share on Twitter"
+                    >
+                        <i class="fab fa-twitter" aria-hidden="true"></i><span>Share on Twitter</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/linux-cv-development-env-configuration/"
+                        aria-label="Share on Weibo"
+                    >
+                        <i class="fab fa-weibo" aria-hidden="true"></i><span>Share on Weibo</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/linux-cv-development-env-configuration/&amp;title=Linux CV 基本環境配置"
+                        aria-label="Share on QQ"
+                    >
+                        <i class="fab fa-qq" aria-hidden="true"></i><span>Share on QQ</span>
+                    </a>
+                </li>
+            
+        </ul>
+    </div>
+
+
+            
+        </div>
+        
+
+
+    
+        
+    
+
+<div id="about">
+    <div id="about-card">
+        <div id="about-btn-close">
+            <i class="fa fa-times"></i>
+        </div>
+        
+            <img id="about-card-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+            <h4 id="about-card-name">Tang Huan</h4>
+        
+            <div id="about-card-bio"></div>
+        
+        
+            <div id="about-card-job">
+                <i class="fa fa-briefcase"></i>
+                <br/>
+                
+            </div>
+        
+        
+            <div id="about-card-location">
+                <i class="fa fa-map-marker-alt"></i>
+                <br/>
+                Shanghai
+            </div>
+        
+    </div>
+</div>
+
+        
+        
+<div id="cover" style="background-image:url('/assets/images/cover.jpg');"></div>
+        
+
+<!--SCRIPTS-->
+
+<script src="/assets/js/script-21vlobaq8sfmdbypn0z91hl6jyot6shixuux8ijser2jcbktmikbwlb6yvjx.min.js"></script>
+
+<!--SCRIPTS END-->
+
+
+    
+      <script type="text/javascript">
+        (function() {
+          function render() {
+            new Gitalk({
+              clientID: 'b7b365f41dbbfaaf9b88',
+              clientSecret: '25de272b8030e3c498dd56b883e4386d881b6d62',
+              repo: 'tangh.github.io',
+              owner: 'tangh',
+              admin: ['tangh'],
+              id: 'articles/linux-cv-development-env-configuration',
+              title: document.title.replace(' - 雨天等放晴', ''),
+              ...{"language":"en","perPage":10,"distractionFreeMode":false,"enableHotKey":true,"pagerDirection":"first","createIssueManually":true}
+            }).render('gitalk');
+          }
+          var gc = document.createElement('script');
+          gc.type = 'text/javascript';
+          gc.src = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js';
+          gc.charset = 'UTF-8';
+          gc.onload = render;
+          gc.async = true;
+          document.querySelector('body').appendChild(gc);
+          var gcs = document.createElement('link');
+          gcs.href = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.css';
+          gcs.type = 'text/css';
+          gcs.rel = 'stylesheet';
+          gcs.media = 'screen,print';
+          document.querySelector('head').appendChild(gcs);
+        })();
+      </script>
+    
+
+
+
+
+    <script>!function(e){var c=Array.prototype.slice.call(document.querySelectorAll("img[data-original]"));function i(){for(var r=0;r<c.length;r++)t=c[r],(n=t.getBoundingClientRect()).top>=-n.height&&0<=n.left&&n.top<=1.5*(e.innerHeight||document.documentElement.clientHeight)&&function(){var t,n,e,i,o=c[r];t=o,n=function(){c=c.filter(function(t){return o!==t})},e=new Image,i=t.getAttribute("data-original"),e.onload=function(){t.src=i,n&&n()},e.src=i}();var t,n}i(),e.addEventListener("scroll",function(){var t,n;t=i,n=e,clearTimeout(t.tId),t.tId=setTimeout(function(){t.call(n)},500)})}(this);</script><!-- hexo-inject:begin --><!-- Begin: Injected MathJax -->
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config("");
+</script>
+
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Queue(function() {
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i=0; i < all.length; i += 1) {
+      all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+  });
+</script>
+
+<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
+</script>
+<!-- End: Injected MathJax -->
+<!-- hexo-inject:end --></body>
+</html>

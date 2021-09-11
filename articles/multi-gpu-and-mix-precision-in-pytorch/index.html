@@ -1,0 +1,782 @@
+
+<!DOCTYPE html>
+
+    <html lang="zh-Hant-CN">
+
+    
+<head>
+    <!-- hexo-inject:begin --><!-- hexo-inject:end --><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="generator" content="雨天等放晴">
+    <title>PyTorch 中多卡及混合精度使用方法 - 雨天等放晴</title>
+    <meta name="author" content="Tang Huan">
+    
+        <meta name="keywords" content="PyTorch,Multi GPU,Mix Precision,深度學習,深度学习,混合精度">
+    
+    
+        <link rel="icon" href="https://tangh.github.io/assets/images/favicon.png">
+    
+    
+        <link rel="apple-touch-icon" sizes="180x180" href="https://tangh.github.io/assets/images/apple-touch-icon.png">
+    
+    
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg"},"articleBody":"\n\n\n\n\nPyTorch 中構建模型和輸入数據的方法\n\nPyTorch 中多卡及混合精度使用方法\n\n\n本文參考 maskrcnn-benchmark 和 MMAction2 (MMCV) 中的實現方式，大概是一年前寫的。在最近整理時還發現一篇 Distributed data parallel training in Pytorch，參考了一下，就如這篇裡面所述，即便現在 PyTorch 官網都沒有一個清晰的多卡訓練教程，只能自己看 code。\n至於混合精度，之前 NVIDIA 出了 apex，在目前 PyTorch 1.6 中已經把 AMP (Automatic mixed precision) 整合進去了，可以很方便調用，本文只是簡述一下原理。\n【2021 更新】最近看到 open-mmlab 寫了一系列文，關於 PyTorch 內部實現的，會更關注 PyTorch 的代碼實現：\n\nPyTorch 源码解读之 DP &amp; DDP：模型并行和分布式训练解析\n\nPyTorch 源码解读之 torch.cuda.amp: 自动混合精度详解\n\n\n多 GPU 和 Process 支持目前譬如 Object Detection，在 inference 單卡一般可行，train 的話數據一多就會很慢。\n原理nn.DataParallel\n早期 PyTorch 中多 GPU 訓練的方式一般為使用 torch.nn.DataParallel()（或 torch.multiprocessing），只需 model = nn.DataParallel(model).cuda()。Model 首先被加載到主 GPU 上，然後複製到其它 GPU 中（DataParallel，多線程）。輸入數據按 batch 維度進行劃分，每個 GPU 分配到的 batch 數量等於輸入總的 batch 除以 GPU 個數（不一定需要整除）。每個 GPU 對各自的輸入數據獨立進行 forward 計算，return 之前又被 DataParallel concat 在一起，因此後續計算 loss 等無需額外 code。loss/gradient 計算後，更新主 GPU 上的模型參數，DataParallel 再將更新後的模型參數複製到其餘 GPU 中，這樣就完成了一次迭代計算。\nnn.DistributedDataParallel\nMask R-CNN 的訓練使用 PyTorch 1.0 新加入的多進程方式，參考 GitHub/torch.distributed.launch 和 PyTorch/Docs。根據官方文檔中的這部分，這種方式有以下好處：\n\nforward 計算之後不合併 batch，每個 GPU 上對自己的 batch 單獨計算 loss/gradient，但隨後梯度會在各個進程之間合併/計算總和（synchronize），而每個進程都有自己的 optimizer，獨立地進行參數更新，沒有了 parameters/batch tensor 在各 GPU 之間傳輸的時間。\n\n每個 GPU 都有獨立的 Python interpreter，避免了 Python 在多線程時的問題，對於 Python 比 C++ 更影響運行時間的模型幫助很大（比如有很多小模塊組成的複雜模型）\n\n可以用於多機 (node) 多 GPU 訓練\n\n\n總結，這種方法會給每個 GPU 啟動一個獨立的進程，這個進程獨立地運行著所有的代碼，它們之間的通信可以只有 Gradient 的傳輸（當然比如為了 logging 的需要，有時候會寫一點傳輸 loss 值的代碼）。為了達到上面的目標：\n\n首先，需要讓每個進程知道自己的 rank 和 world_size，也就是第幾個進程和總共有幾個進程。對應 torch.distributed.launch\n\n還需要一個 Data Sampler，它拿到 rank 之後，給每個進程中的 model，在一個 unique (non-overlap) 的數據集的部分中 sample，使得每個進程處理自己的一部分數據。nn.utils.data.DistributedSampler 就是幹這事的\n\n還需要 Gradients 之間的平均，處理通信和所有 param 的平均值計算之類的，使得每次 backward 之後所有 GPU 上的梯度都是一個相同的平均值（即 all-reduce）。nn.DistributedDataParallel 就是一個 model wrapper 負責這件事情\n\n最後，需要設定隨機數種子，不然 model 初始化的時候參數都不一樣，梯度平均沒意義\n\n\n如果對 Data Sampler 不了解，應該看前一篇，鏈接在開頭。如果對 all-reduce 想了解更多，見下文。\n\n\n\n使用對於單機多 GPU，啟動方式為使用 torch.distributed.launch，只需要 --nproc_per_node=$NGPUS，後方跟訓練腳本位置和它的參數：\n12export NGPUS=4python -m torch.distributed.launch --nproc_per_node=$NGPUS train_net.py --config-file \"config.yaml\"\n\ntorch.distributed.launch 會在 os.environ 中添加 [&quot;WORLD_SIZE&quot;] = $NGPUS 並使用 subprocess.Popen() 啟動 NGPUS 次訓練腳本（並在參數中傳入不同的 Rank）並捕獲 return code。\n在訓練腳本內，需要在開頭加上下面的代碼獲得 torch.distributed.launch 傳入的 local_rank。\n123456789101112131415161718# parser.add_argument ...# 接收分配給這個進程的 process rankparser.add_argument(\"--local_rank\", type=int, default=0)args = parser.parse_args()num_gpus = int(os.environ[\"WORLD_SIZE\"]) if \"WORLD_SIZE\" in os.environ else 1args.distributed = num_gpus &gt; 1if args.distributed:    # 設定執行當前进程的 GPU 并初始化 group，nccl 作為通信後端，需要先裝好    # 註：單 GPU 訓練中指定使用的 GPU，    # 官方更推薦 `os.environ[\"CUDA_VISIBLE_DEVICES\"] = \"0\"`    rank = args.local_rank  # or: rank = int(os.environ['RANK'])    torch.cuda.set_device(rank)  # rank % torch.cuda.device_count()    torch.distributed.init_process_group(        backend=\"nccl\", init_method=\"env://\"    )    # synchronize()\n\ninit_process_group 註冊了一系列信息，包括如何找到 Process 0，其中同步的 synchronize() 主要是 dist.barrier() 使執行到這裡的進程等待，當所有進程都執行到這裡再繼續往下。\n1234567891011121314import torch.distributed as distdef synchronize():  # get_dist_info()    if not dist.is_available():        return    if not dist.is_initialized():        return    else:        rank = dist.get_rank()        world_size = dist.get_world_size()    if world_size == 1:        return    dist.barrier()    return rank, world_size\n\ninit_process_group (dist.is_initialized()) 之後可以用 dist.get_world_size() dist.get_rank() 等方法獲得需要信息，不需要依靠 args 了。\n\n在實例化完 model 後使用\n1234# model = model.to(f'cuda:&#123;local_rank&#125;')model = nn.parallel.DistributedDataParallel(    model, device_ids=[local_rank], output_device=local_rank)\n\n對所有參數註冊一個 gradient reduction functions 用於求和梯度。這樣操作時候，每個 Process 獨立進行 forward，在 backward 的時候，gradient 會自動在所有 GPU 之間 all-reduce，且由於 backward 是單向依賴和進行的，所以這個通信和 backward 是同時進行的，進一步加快速度和減少帶寬壓力。\n\n然後配置 DataLoader 的 Sampler，使不同進程的 model 獲得不同的 input batch。\n12345678910111213train_sampler = torch.utils.data.distributed.DistributedSampler(    train_dataset,    num_replicas=args.world_size,    rank=rank,    shuffle=True,)train_loader = torch.utils.data.DataLoader(    dataset=train_dataset,    batch_size=batch_size_per_gpu,    shuffle=False,  # shuffle should set in sampler if dist    sampler=train_sampler)\n\n\n這一部分只適用與單機多卡 (single node multi gpu)，多幾多卡似乎還要額外對 backward 和 optimizer 進行配置，然後加入 os.environ[&#39;MASTER_ADDR&#39;] 和 os.environ[&#39;MASTER_PORT&#39;] 設置 node 0 的 ip 和 port，slurm 啟動等，我沒用過，不知道具體。\n注意事項learning rate\n每個 GPU 的 memory 是一定的，所以 batch size per GPU 的上限是一定的，如果在 NGPUS = 2 batch size = 2 訓練了模型得到一個精度結果，那麼想在 NGPUS = 1 的情況下使用相同 config 得到基本相同結果，需要進行改動：batch size = 2，但是只有一個 GPU，那麼等同於總 batch size 除以了 2，所以總的 iteration 也需要 ×2，lr 也要減小 N 倍，因為 grad 小 N 倍。\nreduce/gather\n雖然 grad 被自動在所有 GPU 求和了，但是為了 log 的需要，一般還要將每個 process 中得到的 loss 傳輸到 process 0，求得平均後輸出。WRITING DISTRIBUTED APPLICATIONS WITH PYTORCH 中介紹了各種 Collective Communication。\nhttps://zhuanlan.zhihu.com/p/100012827\nlogger/save checkpoint\n參考 mmcv/logging，對於 dist.get_rank() ！= 0 的進程不添加 FileHandler，並設置 log_level=logging.ERROR。from mmcv.utils import get_logger -&gt; get_logger(&#39;taskname&#39;, log_file) 。\n混合精度訓練According to Mixed Precision Training, the steps of fp16 optimizer is as follows.\n\nPrepare model, .half() all modules except batchnorm (groupnorm)\nScale the loss value by a scale factor and convert from fp32 to fp16.\nBP in the fp16 model.\nCopy gradients from fp16 model to fp32 weights.\nUpdate fp32 weights.\nCopy updated parameters from fp32 weights to fp16 model.\n\nhttps://github.com/open-mmlab/mmcv/blob/master/mmcv/runner/hooks/optimizer.py\n雖然 params 有兩份儲存了，但是最消耗 memory 的是對圖像求導的部分，因此仍然可以降低\nPyTorch參考 PyTorch 源码解读之 torch.cuda.amp: 自动混合精度详解。\nApex (Deprecated)Apex 是 Nvidia 的 PyTorch 混合精度訓練工具，對於 FP16 安全的操作在訓練中會 Cast 到 FP16，反之則使用 FP32。\nFP16 的優缺點可參考 Quora/What is the difference between FP16 and FP32 when doing deep learning?。\n12from apex import ampfrom apex.parallel import DistributedDataParallel\n\n在構建完 model 和 optimizer 之後，DistributedDataParallel(model) 之前，使用 amp.initialize 初始化\n1model, optimizer = amp.initialize(model, optimizer, opt_level=amp_opt_level)\n\nopt_level 可參考官方文檔，大致 00 就是不啟用混合精度，工作在 FP32，01 則是啟用。\n在 loss bp 前\n123with amp.scale_loss(losses, optimizer) as scaled_losses:    scaled_losses.backward()optimizer.step()\n\n其它無需改變。\n","dateCreated":"2020-08-30T00:00:00+08:00","dateModified":"2021-09-11T17:34:51+08:00","datePublished":"2020-08-30T00:00:00+08:00","description":"PyTorch 使用進階：多 GPU 多進程訓練和預測，混合精度訓練方法。","headline":"PyTorch 中多卡及混合精度使用方法","image":["https://tangh.github.io/images/thumbnails/pytorch-logo.png"],"mainEntityOfPage":{"@type":"WebPage","@id":"https://tangh.github.io/articles/multi-gpu-and-mix-precision-in-pytorch/"},"publisher":{"@type":"Organization","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg","logo":{"@type":"ImageObject","url":"icon.jpg"}},"url":"https://tangh.github.io/articles/multi-gpu-and-mix-precision-in-pytorch/","keywords":"PyTorch, Computer Vision, Deep Learning","thumbnailUrl":"https://tangh.github.io/images/thumbnails/pytorch-logo.png"}</script>
+    <meta name="description" content="PyTorch 使用進階：多 GPU 多進程訓練和預測，混合精度訓練方法。">
+<meta property="og:type" content="blog">
+<meta property="og:title" content="PyTorch 中多卡及混合精度使用方法">
+<meta property="og:url" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;articles&#x2F;multi-gpu-and-mix-precision-in-pytorch&#x2F;">
+<meta property="og:site_name" content="雨天等放晴">
+<meta property="og:description" content="PyTorch 使用進階：多 GPU 多進程訓練和預測，混合精度訓練方法。">
+<meta property="og:locale" content="en_US">
+<meta property="article:published_time" content="2020-08-29T16:00:00.000Z">
+<meta property="article:modified_time" content="2021-09-11T09:34:51.127Z">
+<meta property="article:author" content="Tang Huan">
+<meta property="article:tag" content="PyTorch">
+<meta property="article:tag" content="Multi GPU">
+<meta property="article:tag" content="Mix Precision">
+<meta property="article:tag" content="深度學習">
+<meta property="article:tag" content="深度学习">
+<meta property="article:tag" content="混合精度">
+<meta name="twitter:card" content="summary">
+    
+    
+        
+    
+    
+        <meta property="og:image" content="https://tangh.github.io/assets/images/icon.jpg"/>
+    
+    
+        <meta property="og:image" content="https://tangh.github.io/images/thumbnails/pytorch-logo.png"/>
+        <meta class="swiftype" name="image" data-type="enum" content="https://tangh.github.io/images/thumbnails/pytorch-logo.png"/>
+    
+    
+    
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
+    <!--STYLES-->
+    
+<link rel="stylesheet" href="/assets/css/style-iaetwm81hfopcuajcp7qnh2zsnqn4dhiu3nftuj79wdhe7fie6l4r0thrs6g.min.css">
+
+    <!--STYLES END-->
+    
+    <script async src="https://www.googletagmanager.com/gtag/js?id=UA-137837052-1"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'UA-137837052-1');
+    </script><!-- hexo-inject:begin --><!-- hexo-inject:end -->
+
+
+    
+
+</head>
+
+    <body>
+        <!-- hexo-inject:begin --><!-- hexo-inject:end --><div id="blog">
+            <!-- Define author's picture -->
+
+
+    
+        
+            
+        
+    
+
+<header id="header" data-behavior="4">
+    <i id="btn-open-sidebar" class="fa fa-lg fa-bars"></i>
+    <div class="header-title">
+        <a
+            class="header-title-link"
+            href="/"
+            aria-label=""
+        >
+            雨天等放晴
+        </a>
+    </div>
+    
+        
+            <a
+                class="header-right-picture "
+                href="#about"
+                aria-label="Open the link: /#about"
+            >
+        
+        
+            <img class="header-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+        </a>
+    
+</header>
+
+            <!-- Define author's picture -->
+
+
+
+        
+    
+
+<nav id="sidebar" data-behavior="4">
+    <div class="sidebar-container">
+        
+            <div class="sidebar-profile">
+                <a
+                    href="/#about"
+                    aria-label="Read more about the author"
+                >
+                    <img class="sidebar-profile-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+                </a>
+                <h4 class="sidebar-profile-name">Tang Huan</h4>
+                
+                    <h5 class="sidebar-profile-bio"></h5>
+                
+            </div>
+        
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/"
+                            
+                            rel="noopener"
+                            title="Home"
+                        >
+                        <i class="sidebar-button-icon fa fa-home" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Home</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-categories"
+                            
+                            rel="noopener"
+                            title="Categories"
+                        >
+                        <i class="sidebar-button-icon fa fa-bookmark" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Categories</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-tags"
+                            
+                            rel="noopener"
+                            title="Tags"
+                        >
+                        <i class="sidebar-button-icon fa fa-tags" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Tags</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-archives"
+                            
+                            rel="noopener"
+                            title="Archives"
+                        >
+                        <i class="sidebar-button-icon fa fa-archive" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Archives</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/about"
+                            
+                            rel="noopener"
+                            title="About"
+                        >
+                        <i class="sidebar-button-icon fas fa-cube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">About</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://twitter.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Twitter"
+                        >
+                        <i class="sidebar-button-icon fab fa-twitter" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Twitter</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.flickr.com/photos/135277712@N07/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Flickr"
+                        >
+                        <i class="sidebar-button-icon fab fa-flickr" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Flickr</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.instagram.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Instagram"
+                        >
+                        <i class="sidebar-button-icon fab fa-instagram" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Instagram</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="YouTube"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">YouTube</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://space.bilibili.com/634428/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="BiliBili"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube-square" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">BiliBili</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+    </div>
+</nav>
+
+            
+            <div id="main" data-behavior="4"
+                 class="
+                        hasCoverMetaIn
+                        ">
+                
+<article class="post">
+    
+    
+        <div class="post-header main-content-wrap text-center">
+    
+        <h1 class="post-title">
+            PyTorch 中多卡及混合精度使用方法
+        </h1>
+    
+    
+        <div class="post-meta">
+    <time datetime="2020-08-30T00:00:00+08:00">
+	
+		    Aug 30, 2020
+    	
+    </time>
+    
+        <span>in </span>
+        
+    <a class="category-link" href="/categories/Computer-Science/">Computer Science</a>, <a class="category-link" href="/categories/Computer-Science/Deep-Learning/">Deep Learning</a>
+
+
+    
+</div>
+
+    
+</div>
+
+    
+    
+        <div class="post-content markdown">
+    
+        <div class="main-content-wrap">
+            <!-- excerpt -->
+
+<br/>
+
+<ul>
+<li><p><a href="https://tangh.github.io/articles/build-model-and-dataset-in-pytorch">PyTorch 中構建模型和輸入数據的方法</a></p>
+</li>
+<li><p><strong>PyTorch 中多卡及混合精度使用方法</strong></p>
+</li>
+</ul>
+<p>本文參考 <a href="https://github.com/facebookresearch/maskrcnn-benchmark" target="_blank" rel="noopener">maskrcnn-benchmark</a> 和 <a href="https://github.com/open-mmlab/mmaction2" target="_blank" rel="noopener">MMAction2</a> (MMCV) 中的實現方式，大概是一年前寫的。在最近整理時還發現一篇 <a href="https://yangkky.github.io/2019/07/08/distributed-pytorch-tutorial.html" target="_blank" rel="noopener">Distributed data parallel training in Pytorch</a>，參考了一下，就如這篇裡面所述，即便現在 PyTorch 官網都沒有一個清晰的多卡訓練教程，只能自己看 code。</p>
+<p>至於混合精度，之前 NVIDIA 出了 apex，在目前 <a href="https://pytorch.org/blog/pytorch-1.6-released/" target="_blank" rel="noopener">PyTorch 1.6</a> 中已經把 AMP (Automatic mixed precision) 整合進去了，可以很方便調用，本文只是簡述一下原理。</p>
+<p>【2021 更新】最近看到 open-mmlab 寫了一系列文，關於 PyTorch 內部實現的，會更關注 PyTorch 的代碼實現：</p>
+<ul>
+<li><p><a href="https://zhuanlan.zhihu.com/p/343951042" target="_blank" rel="noopener">PyTorch 源码解读之 DP &amp; DDP：模型并行和分布式训练解析</a></p>
+</li>
+<li><p><a href="https://zhuanlan.zhihu.com/p/348554267" target="_blank" rel="noopener">PyTorch 源码解读之 torch.cuda.amp: 自动混合精度详解</a></p>
+</li>
+</ul>
+<h1 id="多-GPU-和-Process-支持"><a href="#多-GPU-和-Process-支持" class="headerlink" title="多 GPU 和 Process 支持"></a>多 GPU 和 Process 支持</h1><p>目前譬如 Object Detection，在 inference 單卡一般可行，train 的話數據一多就會很慢。</p>
+<h2 id="原理"><a href="#原理" class="headerlink" title="原理"></a>原理</h2><p><strong><a href="https://pytorch.org/docs/stable/nn.html#dataparallel" target="_blank" rel="noopener">nn.DataParallel</a></strong></p>
+<p>早期 PyTorch 中多 GPU 訓練的方式一般為使用 <a href="https://pytorch.org/tutorials/beginner/blitz/data_parallel_tutorial.html#sphx-glr-beginner-blitz-data-parallel-tutorial-py" target="_blank" rel="noopener"><code>torch.nn.DataParallel()</code></a>（或 <code>torch.multiprocessing</code>），只需 <code>model = nn.DataParallel(model).cuda()</code>。Model 首先被加載到主 GPU 上，然後複製到其它 GPU 中（DataParallel，多線程）。輸入數據按 batch 維度進行劃分，每個 GPU 分配到的 batch 數量等於輸入總的 batch 除以 GPU 個數（不一定需要整除）。每個 GPU 對各自的輸入數據獨立進行 forward 計算，return 之前又被 DataParallel concat 在一起，因此後續計算 loss 等無需額外 code。loss/gradient 計算後，更新主 GPU 上的模型參數，DataParallel 再將更新後的模型參數複製到其餘 GPU 中，這樣就完成了一次迭代計算。</p>
+<p><strong><a href="https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html#torch.nn.parallel.DistributedDataParallel" target="_blank" rel="noopener">nn.DistributedDataParallel</a></strong></p>
+<p>Mask R-CNN 的訓練使用 PyTorch 1.0 新加入的多進程方式，參考 <a href="https://github.com/pytorch/pytorch/blob/master/torch/distributed/launch.py" target="_blank" rel="noopener">GitHub/torch.distributed.launch</a> 和 <a href="https://pytorch.org/docs/stable/distributed.html#launch-utility" target="_blank" rel="noopener">PyTorch/Docs</a>。根據官方文檔中的<a href="https://pytorch.org/docs/stable/distributed.html#basics" target="_blank" rel="noopener">這部分</a>，這種方式有以下好處：</p>
+<ul>
+<li><p>forward 計算之後不合併 batch，每個 GPU 上對自己的 batch 單獨計算 loss/gradient，但隨後梯度會在各個進程之間合併/計算總和（synchronize），而每個進程都有自己的 optimizer，獨立地進行參數更新，沒有了 parameters/batch tensor 在各 GPU 之間傳輸的時間。</p>
+</li>
+<li><p>每個 GPU 都有獨立的 Python interpreter，避免了 Python 在多線程時的問題，對於 Python 比 C++ 更影響運行時間的模型幫助很大（比如有很多小模塊組成的複雜模型）</p>
+</li>
+<li><p>可以用於多機 (node) 多 GPU 訓練</p>
+</li>
+</ul>
+<p>總結，這種方法會給每個 GPU 啟動一個獨立的進程，這個進程獨立地運行著所有的代碼，它們之間的通信可以只有 Gradient 的傳輸（當然比如為了 logging 的需要，有時候會寫一點傳輸 loss 值的代碼）。為了達到上面的目標：</p>
+<ul>
+<li><p>首先，需要讓每個進程知道自己的 <code>rank</code> 和 <code>world_size</code>，也就是第幾個進程和總共有幾個進程。對應 <a href="https://github.com/pytorch/pytorch/blob/master/torch/distributed/launch.py" target="_blank" rel="noopener"><code>torch.distributed.launch</code></a></p>
+</li>
+<li><p>還需要一個 <code>Data Sampler</code>，它拿到 rank 之後，給每個進程中的 model，在一個 unique (non-overlap) 的數據集的部分中 sample，使得每個進程處理自己的一部分數據。<a href="https://pytorch.org/docs/stable/_modules/torch/utils/data/distributed.html" target="_blank" rel="noopener"><code>nn.utils.data.DistributedSampler</code></a> 就是幹這事的</p>
+</li>
+<li><p>還需要 Gradients 之間的平均，處理通信和所有 param 的平均值計算之類的，使得每次 backward 之後所有 GPU 上的梯度都是一個相同的平均值（即 all-reduce）。<a href="https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html#torch.nn.parallel.DistributedDataParallel" target="_blank" rel="noopener"><code>nn.DistributedDataParallel</code></a> 就是一個 model wrapper 負責這件事情</p>
+</li>
+<li><p>最後，需要設定隨機數種子，不然 model 初始化的時候參數都不一樣，梯度平均沒意義</p>
+</li>
+</ul>
+<div class="alert info"><p>如果對 <code>Data Sampler</code> 不了解，應該看前一篇，鏈接在開頭。如果對 <code>all-reduce</code> 想了解更多，見下文。</p>
+</div>
+
+
+<h2 id="使用"><a href="#使用" class="headerlink" title="使用"></a>使用</h2><p>對於單機多 GPU，啟動方式為使用 <code>torch.distributed.launch</code>，只需要 <code>--nproc_per_node=$NGPUS</code>，後方跟訓練腳本位置和它的參數：</p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">export</span> NGPUS=4</span><br><span class="line">python -m torch.distributed.launch --nproc_per_node=<span class="variable">$NGPUS</span> train_net.py --config-file <span class="string">"config.yaml"</span></span><br></pre></td></tr></table></figure>
+
+<p><code>torch.distributed.launch</code> 會在 <code>os.environ</code> 中添加 <code>[&quot;WORLD_SIZE&quot;] = $NGPUS</code> 並使用 <code>subprocess.Popen()</code> 啟動 NGPUS 次訓練腳本（並在參數中傳入不同的 Rank）並捕獲 return code。</p>
+<p>在訓練腳本內，需要在開頭加上下面的代碼獲得 <code>torch.distributed.launch</code> 傳入的 <code>local_rank</code>。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># parser.add_argument ...</span></span><br><span class="line"><span class="comment"># 接收分配給這個進程的 process rank</span></span><br><span class="line">parser.add_argument(<span class="string">"--local_rank"</span>, type=int, default=<span class="number">0</span>)</span><br><span class="line">args = parser.parse_args()</span><br><span class="line"></span><br><span class="line">num_gpus = int(os.environ[<span class="string">"WORLD_SIZE"</span>]) <span class="keyword">if</span> <span class="string">"WORLD_SIZE"</span> <span class="keyword">in</span> os.environ <span class="keyword">else</span> <span class="number">1</span></span><br><span class="line">args.distributed = num_gpus &gt; <span class="number">1</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> args.distributed:</span><br><span class="line">    <span class="comment"># 設定執行當前进程的 GPU 并初始化 group，nccl 作為通信後端，需要先裝好</span></span><br><span class="line">    <span class="comment"># 註：單 GPU 訓練中指定使用的 GPU，</span></span><br><span class="line">    <span class="comment"># 官方更推薦 `os.environ["CUDA_VISIBLE_DEVICES"] = "0"`</span></span><br><span class="line">    rank = args.local_rank  <span class="comment"># or: rank = int(os.environ['RANK'])</span></span><br><span class="line">    torch.cuda.set_device(rank)  <span class="comment"># rank % torch.cuda.device_count()</span></span><br><span class="line">    torch.distributed.init_process_group(</span><br><span class="line">        backend=<span class="string">"nccl"</span>, init_method=<span class="string">"env://"</span></span><br><span class="line">    )</span><br><span class="line">    <span class="comment"># synchronize()</span></span><br></pre></td></tr></table></figure>
+
+<p><code>init_process_group</code> 註冊了一系列信息，包括如何找到 Process 0，其中同步的 <code>synchronize()</code> 主要是 <code>dist.barrier()</code> 使執行到這裡的進程等待，當所有進程都執行到這裡再繼續往下。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> torch.distributed <span class="keyword">as</span> dist</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">def</span> <span class="title">synchronize</span><span class="params">()</span>:</span>  <span class="comment"># get_dist_info()</span></span><br><span class="line">    <span class="keyword">if</span> <span class="keyword">not</span> dist.is_available():</span><br><span class="line">        <span class="keyword">return</span></span><br><span class="line">    <span class="keyword">if</span> <span class="keyword">not</span> dist.is_initialized():</span><br><span class="line">        <span class="keyword">return</span></span><br><span class="line">    <span class="keyword">else</span>:</span><br><span class="line">        rank = dist.get_rank()</span><br><span class="line">        world_size = dist.get_world_size()</span><br><span class="line">    <span class="keyword">if</span> world_size == <span class="number">1</span>:</span><br><span class="line">        <span class="keyword">return</span></span><br><span class="line">    dist.barrier()</span><br><span class="line">    <span class="keyword">return</span> rank, world_size</span><br></pre></td></tr></table></figure>
+
+<p><code>init_process_group</code> (<code>dist.is_initialized()</code>) 之後可以用 <code>dist.get_world_size()</code> <code>dist.get_rank()</code> 等方法獲得需要信息，不需要依靠 args 了。</p>
+<hr>
+<p>在實例化完 model 後使用</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># model = model.to(f'cuda:&#123;local_rank&#125;')</span></span><br><span class="line">model = nn.parallel.DistributedDataParallel(</span><br><span class="line">    model, device_ids=[local_rank], output_device=local_rank</span><br><span class="line">)</span><br></pre></td></tr></table></figure>
+
+<p>對所有參數註冊一個 gradient reduction functions 用於求和梯度。這樣操作時候，每個 Process 獨立進行 forward，在 backward 的時候，gradient 會自動在所有 GPU 之間 all-reduce，且由於 backward 是單向依賴和進行的，所以這個通信和 backward 是同時進行的，進一步加快速度和減少帶寬壓力。</p>
+<hr>
+<p>然後配置 DataLoader 的 Sampler，使不同進程的 model 獲得不同的 input batch。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">train_sampler = torch.utils.data.distributed.DistributedSampler(</span><br><span class="line">    train_dataset,</span><br><span class="line">    num_replicas=args.world_size,</span><br><span class="line">    rank=rank,</span><br><span class="line">    shuffle=<span class="literal">True</span>,</span><br><span class="line">)</span><br><span class="line"></span><br><span class="line">train_loader = torch.utils.data.DataLoader(</span><br><span class="line">    dataset=train_dataset,</span><br><span class="line">    batch_size=batch_size_per_gpu,</span><br><span class="line">    shuffle=<span class="literal">False</span>,  <span class="comment"># shuffle should set in sampler if dist</span></span><br><span class="line">    sampler=train_sampler</span><br><span class="line">)</span><br></pre></td></tr></table></figure>
+
+<hr>
+<p>這一部分只適用與單機多卡 (single node multi gpu)，多幾多卡似乎還要額外對 backward 和 optimizer 進行配置，然後加入 <code>os.environ[&#39;MASTER_ADDR&#39;]</code> 和 <code>os.environ[&#39;MASTER_PORT&#39;]</code> 設置 node 0 的 ip 和 port，slurm 啟動等，我沒用過，不知道具體。</p>
+<h2 id="注意事項"><a href="#注意事項" class="headerlink" title="注意事項"></a>注意事項</h2><p><strong>learning rate</strong></p>
+<p>每個 GPU 的 memory 是一定的，所以 batch size per GPU 的上限是一定的，如果在 <code>NGPUS = 2</code> <code>batch size = 2</code> 訓練了模型得到一個精度結果，那麼想在 <code>NGPUS = 1</code> 的情況下使用相同 config 得到基本相同結果，需要進行改動：<code>batch size = 2</code>，但是只有一個 GPU，那麼等同於總 batch size 除以了 2，所以總的 iteration 也需要 ×2，lr 也要減小 N 倍，因為 grad 小 N 倍。</p>
+<p><strong>reduce/gather</strong></p>
+<p>雖然 grad 被自動在所有 GPU 求和了，但是為了 log 的需要，一般還要將每個 process 中得到的 loss 傳輸到 process 0，求得平均後輸出。<a href="https://pytorch.org/tutorials/intermediate/dist_tuto.html" target="_blank" rel="noopener">WRITING DISTRIBUTED APPLICATIONS WITH PYTORCH</a> 中介紹了各種 Collective Communication。</p>
+<p><a href="https://zhuanlan.zhihu.com/p/100012827" target="_blank" rel="noopener">https://zhuanlan.zhihu.com/p/100012827</a></p>
+<p><strong>logger/save checkpoint</strong></p>
+<p>參考 <a href="https://github.com/open-mmlab/mmcv/blob/master/mmcv/utils/logging.py" target="_blank" rel="noopener">mmcv/logging</a>，對於 <code>dist.get_rank() ！= 0</code> 的進程不添加 FileHandler，並設置 <code>log_level=logging.ERROR</code>。<code>from mmcv.utils import get_logger</code> -&gt; <code>get_logger(&#39;taskname&#39;, log_file)</code> 。</p>
+<h1 id="混合精度訓練"><a href="#混合精度訓練" class="headerlink" title="混合精度訓練"></a>混合精度訓練</h1><p>According to <a href="https://arxiv.org/abs/1710.03740" target="_blank" rel="noopener">Mixed Precision Training</a>, the steps of fp16 optimizer is as follows.</p>
+<ol start="0">
+<li>Prepare model, <code>.half()</code> all modules except batchnorm (groupnorm)</li>
+<li>Scale the loss value by a scale factor and convert from fp32 to fp16.</li>
+<li>BP in the fp16 model.</li>
+<li>Copy gradients from fp16 model to fp32 weights.</li>
+<li>Update fp32 weights.</li>
+<li>Copy updated parameters from fp32 weights to fp16 model.</li>
+</ol>
+<p><a href="https://github.com/open-mmlab/mmcv/blob/master/mmcv/runner/hooks/optimizer.py" target="_blank" rel="noopener">https://github.com/open-mmlab/mmcv/blob/master/mmcv/runner/hooks/optimizer.py</a></p>
+<p>雖然 params 有兩份儲存了，但是最消耗 memory 的是對圖像求導的部分，因此仍然可以降低</p>
+<h2 id="PyTorch"><a href="#PyTorch" class="headerlink" title="PyTorch"></a>PyTorch</h2><p>參考 <a href="https://zhuanlan.zhihu.com/p/348554267" target="_blank" rel="noopener">PyTorch 源码解读之 torch.cuda.amp: 自动混合精度详解</a>。</p>
+<h2 id="Apex-Deprecated"><a href="#Apex-Deprecated" class="headerlink" title="Apex (Deprecated)"></a>Apex (Deprecated)</h2><p><a href="https://github.com/NVIDIA/apex" target="_blank" rel="noopener">Apex</a> 是 Nvidia 的 PyTorch 混合精度訓練工具，對於 FP16 安全的操作在訓練中會 Cast 到 FP16，反之則使用 FP32。</p>
+<p>FP16 的優缺點可參考 <a href="https://www.quora.com/What-is-the-difference-between-FP16-and-FP32-when-doing-deep-learning" target="_blank" rel="noopener">Quora/What is the difference between FP16 and FP32 when doing deep learning?</a>。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">from</span> apex <span class="keyword">import</span> amp</span><br><span class="line"><span class="keyword">from</span> apex.parallel <span class="keyword">import</span> DistributedDataParallel</span><br></pre></td></tr></table></figure>
+
+<p>在構建完 model 和 optimizer 之後，<code>DistributedDataParallel(model)</code> 之前，使用 <code>amp.initialize</code> 初始化</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">model, optimizer = amp.initialize(model, optimizer, opt_level=amp_opt_level)</span><br></pre></td></tr></table></figure>
+
+<p><code>opt_level</code> 可參考<a href="https://nvidia.github.io/apex/amp.html#opt-levels" target="_blank" rel="noopener">官方文檔</a>，大致 <code>00</code> 就是不啟用混合精度，工作在 FP32，<code>01</code> 則是啟用。</p>
+<p>在 loss bp 前</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">with</span> amp.scale_loss(losses, optimizer) <span class="keyword">as</span> scaled_losses:</span><br><span class="line">    scaled_losses.backward()</span><br><span class="line">optimizer.step()</span><br></pre></td></tr></table></figure>
+
+<p>其它無需改變。</p>
+<br/>
+            
+
+
+        </div>
+    </div>
+    <div id="post-footer" class="post-footer main-content-wrap">
+        
+            <div class="post-footer-tags">
+                <span class="text-color-light text-small">TAGGED IN</span><br/>
+                
+    <a class="tag tag--primary tag--small t-link" href="/tags/Computer-Vision/" rel="tag">Computer Vision</a> <a class="tag tag--primary tag--small t-link" href="/tags/Deep-Learning/" rel="tag">Deep Learning</a> <a class="tag tag--primary tag--small t-link" href="/tags/PyTorch/" rel="tag">PyTorch</a>
+
+            </div>
+        
+        
+            <div class="post-actions-wrap">
+    <nav>
+        <ul class="post-actions post-action-nav">
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/python-processes-threads-and-http/"
+                    data-tooltip="Python 中的多進程、多線程以及發送和響應 HTTP 請求"
+                    aria-label="PREVIOUS: Python 中的多進程、多線程以及發送和響應 HTTP 請求"
+                >
+                    
+                        <i class="fa fa-angle-left" aria-hidden="true"></i>
+                        <span class="hide-xs hide-sm text-small icon-ml">PREVIOUS</span>
+                    </a>
+            </li>
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/linux-cv-development-env-configuration/"
+                    data-tooltip="Linux CV 基本環境配置"
+                    aria-label="NEXT: Linux CV 基本環境配置"
+                >
+                    
+                        <span class="hide-xs hide-sm text-small icon-mr">NEXT</span>
+                        <i class="fa fa-angle-right" aria-hidden="true"></i>
+                    </a>
+            </li>
+        </ul>
+    </nav>
+    <ul class="post-actions post-action-share">
+        <li class="post-action hide-lg hide-md hide-sm">
+            <a
+                class="post-action-btn btn btn--default btn-open-shareoptions"
+                href="#btn-open-shareoptions"
+                aria-label="Share this post"
+            >
+                <i class="fa fa-share-alt" aria-hidden="true"></i>
+            </a>
+        </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/multi-gpu-and-mix-precision-in-pytorch/"
+                    title="Share on Facebook"
+                    aria-label="Share on Facebook"
+                >
+                    <i class="fab fa-facebook" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/multi-gpu-and-mix-precision-in-pytorch/"
+                    title="Share on Twitter"
+                    aria-label="Share on Twitter"
+                >
+                    <i class="fab fa-twitter" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/multi-gpu-and-mix-precision-in-pytorch/"
+                    title="Share on Weibo"
+                    aria-label="Share on Weibo"
+                >
+                    <i class="fab fa-weibo" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/multi-gpu-and-mix-precision-in-pytorch/&amp;title=PyTorch 中多卡及混合精度使用方法"
+                    title="Share on QQ"
+                    aria-label="Share on QQ"
+                >
+                    <i class="fab fa-qq" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+        
+            
+                <li class="post-action">
+                    <a
+                        class="post-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                        <i class="fa fa-comment"></i>
+                    </a>
+                </li>
+            
+        
+        <li class="post-action">
+            
+                <a class="post-action-btn btn btn--default" href="#" aria-label="Back to top">
+            
+                <i class="fa fa-list" aria-hidden="true"></i>
+            </a>
+        </li>
+    </ul>
+</div>
+
+
+        
+        
+            
+                <div id="gitalk"></div>
+
+            
+        
+    </div>
+</article>
+
+
+
+                <footer id="footer" class="main-content-wrap">
+    <span class="copyrights">
+        Copyrights &copy; 2021 Tang Huan. All Rights Reserved.
+    </span>
+</footer>
+
+            </div>
+            
+                <div id="bottom-bar" class="post-bottom-bar" data-behavior="4">
+                    <div class="post-bar-actions-wrap">
+    <div class="post-actions post-action-share">
+        <div class="post-action">
+            
+                <a class="post-bar-action-btn btn btn--default" href="#" aria-label="Back to top">
+            
+                <i class="fas fa-angle-up" aria-hidden="true"></i>
+            </a>
+        </div>
+        
+            
+                <div class="post-action">
+                    <a 
+                        class="post-bar-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                         <i class="fas fa-angle-down"></i>
+                    </a>
+                </div>
+            
+        
+    </div>
+</div>
+                </div>
+                
+    <div id="share-options-bar" class="share-options-bar" data-behavior="4">
+        <i id="btn-close-shareoptions" class="fa fa-times"></i>
+        <ul class="share-options">
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/multi-gpu-and-mix-precision-in-pytorch/"
+                        aria-label="Share on Facebook"
+                    >
+                        <i class="fab fa-facebook" aria-hidden="true"></i><span>Share on Facebook</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/multi-gpu-and-mix-precision-in-pytorch/"
+                        aria-label="Share on Twitter"
+                    >
+                        <i class="fab fa-twitter" aria-hidden="true"></i><span>Share on Twitter</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/multi-gpu-and-mix-precision-in-pytorch/"
+                        aria-label="Share on Weibo"
+                    >
+                        <i class="fab fa-weibo" aria-hidden="true"></i><span>Share on Weibo</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/multi-gpu-and-mix-precision-in-pytorch/&amp;title=PyTorch 中多卡及混合精度使用方法"
+                        aria-label="Share on QQ"
+                    >
+                        <i class="fab fa-qq" aria-hidden="true"></i><span>Share on QQ</span>
+                    </a>
+                </li>
+            
+        </ul>
+    </div>
+
+
+            
+        </div>
+        
+
+
+    
+        
+    
+
+<div id="about">
+    <div id="about-card">
+        <div id="about-btn-close">
+            <i class="fa fa-times"></i>
+        </div>
+        
+            <img id="about-card-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+            <h4 id="about-card-name">Tang Huan</h4>
+        
+            <div id="about-card-bio"></div>
+        
+        
+            <div id="about-card-job">
+                <i class="fa fa-briefcase"></i>
+                <br/>
+                
+            </div>
+        
+        
+            <div id="about-card-location">
+                <i class="fa fa-map-marker-alt"></i>
+                <br/>
+                Shanghai
+            </div>
+        
+    </div>
+</div>
+
+        
+        
+<div id="cover" style="background-image:url('/assets/images/cover.jpg');"></div>
+        
+
+<!--SCRIPTS-->
+
+<script src="/assets/js/script-21vlobaq8sfmdbypn0z91hl6jyot6shixuux8ijser2jcbktmikbwlb6yvjx.min.js"></script>
+
+<!--SCRIPTS END-->
+
+
+    
+      <script type="text/javascript">
+        (function() {
+          function render() {
+            new Gitalk({
+              clientID: 'b7b365f41dbbfaaf9b88',
+              clientSecret: '25de272b8030e3c498dd56b883e4386d881b6d62',
+              repo: 'tangh.github.io',
+              owner: 'tangh',
+              admin: ['tangh'],
+              id: 'articles/multi-gpu-and-mix-precision-in-pytorch',
+              title: document.title.replace(' - 雨天等放晴', ''),
+              ...{"language":"en","perPage":10,"distractionFreeMode":false,"enableHotKey":true,"pagerDirection":"first","createIssueManually":true}
+            }).render('gitalk');
+          }
+          var gc = document.createElement('script');
+          gc.type = 'text/javascript';
+          gc.src = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js';
+          gc.charset = 'UTF-8';
+          gc.onload = render;
+          gc.async = true;
+          document.querySelector('body').appendChild(gc);
+          var gcs = document.createElement('link');
+          gcs.href = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.css';
+          gcs.type = 'text/css';
+          gcs.rel = 'stylesheet';
+          gcs.media = 'screen,print';
+          document.querySelector('head').appendChild(gcs);
+        })();
+      </script>
+    
+
+
+
+
+    <script>!function(e){var c=Array.prototype.slice.call(document.querySelectorAll("img[data-original]"));function i(){for(var r=0;r<c.length;r++)t=c[r],(n=t.getBoundingClientRect()).top>=-n.height&&0<=n.left&&n.top<=1.5*(e.innerHeight||document.documentElement.clientHeight)&&function(){var t,n,e,i,o=c[r];t=o,n=function(){c=c.filter(function(t){return o!==t})},e=new Image,i=t.getAttribute("data-original"),e.onload=function(){t.src=i,n&&n()},e.src=i}();var t,n}i(),e.addEventListener("scroll",function(){var t,n;t=i,n=e,clearTimeout(t.tId),t.tId=setTimeout(function(){t.call(n)},500)})}(this);</script><!-- hexo-inject:begin --><!-- Begin: Injected MathJax -->
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config("");
+</script>
+
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Queue(function() {
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i=0; i < all.length; i += 1) {
+      all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+  });
+</script>
+
+<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
+</script>
+<!-- End: Injected MathJax -->
+<!-- hexo-inject:end --></body>
+</html>

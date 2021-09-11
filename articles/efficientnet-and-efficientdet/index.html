@@ -1,0 +1,1037 @@
+
+<!DOCTYPE html>
+
+    <html lang="zh-Hans-CN">
+
+    
+<head>
+    <!-- hexo-inject:begin --><!-- hexo-inject:end --><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="generator" content="雨天等放晴">
+    <title>EfficientNet 和 EfficientDet - 雨天等放晴</title>
+    <meta name="author" content="Tang Huan">
+    
+        <meta name="keywords" content="EfficientNet,EfficientDet,PANet,BiFPN,Backbone,Object Detection,目标检测,目標檢測">
+    
+    
+        <link rel="icon" href="https://tangh.github.io/assets/images/favicon.png">
+    
+    
+        <link rel="apple-touch-icon" sizes="180x180" href="https://tangh.github.io/assets/images/apple-touch-icon.png">
+    
+    
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg"},"articleBody":"\n\n\nEfficientNet (CVPR 2020) 是一个单级检测框架，构建在 EfficientNet (ICML 2019) Backbone 之上，加上以下两点 Detector 部分的创新：\n\nBiFPN (weighted bi-directional feature pyramid network)：融合多尺度特征。以往的 FPN 相关研究中，特征融合是通过简单相加来融合，意味着每个特征图的权重相等。然而不同分辨率的特征对结果的贡献不同，这里引入一个可学习权重。此外，通过重复的 top-down 和 bottom-up 结构使特征更有效流动。\n\nScaling method：对所有的 backbone、neck、head 联合调整特征图大小、宽度、深度。且以往一般通过更大的 backbone 和更大的 input size 来提高精度，但是发现增大 neck 和 head 同样很关键。\n\n\n注重速度，同时注重提供大范围内的速度—精度调整。精度最好结果为 52.2 AP (COCO test-dev) 52M 325B FLOPs。这篇文章以 Detector 的各个部分来看 EfficientDet 这篇文章，在 backbone 部分会分析 EfficientNet 这篇文章。\n\n\n\n\nNeck - BiFPN先简要介绍 PANet，如下图，PANet 主要在 neck 部分增加了自下而上的一支（Bottom-up path augmentation）；以及改进了特征重采样的方式（Adaptive feature pooling），聚合每个特征层次上的每个 RoI，避免任意分配的结果；以及使用一个小型 fc 层用于补充 mask 预测，互补作用。\nPANet framework\n\n增加 Bottom-up 分支是为了 low-layer information 更容易传播，以往需要穿过整个 backbone（红色箭头），经过的层数非常多，现在可以通过绿色箭头的路径经过几层就达到深层，使得特征可以更有效流动。连接方式是纵向 3 × 3, s = 2 卷积 -&gt; 横向相加 -&gt; 纵向 3 × 3 卷积。\n在FPN中，依据 RoI 的大小将 RoI 分配到不同特征层次。这样小面积的 RoI 分配到 low-level，大的 RoI 分配到 high-level，虽然简单有效，但可能会产生非最优结果。例如两个具有 10 个像素差的 RoI 可能分配到不同特征层次，而实际上这两个 RoI 非常相似。特征的重要性可能与他们所属的特征层次没有太大关系：high-level 特征具有大的感受野并捕获了丰富的上下文信息，允许小 RoI 获取这些特征，能更好地使用上下文信息做预测；low-level 特征具有许多微小细节和高定位精度，允许大 RoI 获取这些特征显然也是有益的。融合操作可以采用 element-wise max or sum。注意融合不是在 RoIAlign 之后立即进行，而是经过一个 fc(box head) 或一个 conv(mask head) 之后才进行。\n对于 fc mask pred，从 mask head 的 conv3 引出。fc 对于位置敏感而 conv 基于一个局部信息，它们是互补的，所以引入 fc 有助于提升 mask 精度。\nPANet framework details\n\n\n\n下图 （f）是 BiFPN 的结构图，它与 PANet（b）同样有一条额外的 bottom-up path，使得特征可以双向流动（bi-directional）而不是原始 FPN 中的单向流动。比起 PANet，BiFPN 有以下几个区别：\n\n去掉了只有一个输入 edge 的节点（共两个）：如果某一个节点只有一条输入 edge，那么它对特征融合（网络）中贡献较小。\n\n增加了从原始输入到输出节点的 edge：融合更多的特征，又不增大太多开销。\n\n虚线框内的部分是可重复的，根据整个网络的规模叠加不同的个数。\n\n\n下图中（c）是 NAS-FPN，它的结构是通过网络自动学习设计生成的，虽然它的计算量相对 PANet 较小，但是计算出这样一个结构需要花费大量的时间，同时结果不规则且难以解释。图（d/e）是作者探索的两种其它结构。\nDifferent Necks of Detection Network\n\n同时，如最开始提到，与上面各种其它方法均不同的是，BiFPN 中特征图加和是带有权重的。也就是 \\( O=\\sum_i w_i \\cdot I_i \\)，其中 \\( w_i \\) 可以是一个标量（对应于每个特征图一个不同权重）或是一个矢量（对应于每个通道一个不同权重）或是一个张量（对应于每个像素一个不同权重）。实验发现使用标量效果就比较好了，但是直接使用的话由于 \\( w_i \\) 没有限制，容易造成训练不稳定。比较直接的想法是对所有权重使用 Softmax，这样权重之和为 1，但是实验发现 Softmax 会使 GPU 计算时间增大，性能下降。所以作者提出了一种快速 normalize 方法：\n$$O = \\sum_i \\frac{w_i}{\\epsilon + \\sum_j w_j} \\cdot I_i$$\n为保证每个权重值 &gt;0，所以每个权重需要使用 ReLU，epsilon = 0.0001。实验得到这种方法精度与 Softmax 相同但是速度提高 30%。\n具体的连接方式如下，以 P6 为例，其它类似。其中 \\( P_6^{in} ,\\ P_6^{td} ,\\ P_6^{out} \\) 分别是输入、中间、输出节点。\n$$P_6^{td} = Conv \\left( \\frac{w_1 \\cdot P_6^{in} + w_2 \\cdot Resize(P_7^{in})}{w_1 + w_2 + \\epsilon}\\right)$$\n$$P_6^{out} = Conv \\left( \\frac{w_1’ \\cdot P_6^{in} + w_2’ \\cdot P_6^{td} + w_3’ \\cdot Resize(P_5^{out})}{w_1’ + w_2’ + w_3’ + \\epsilon}\\right)$$\n为了节省计算量，这里的卷积是 depthwise separable convolution，即把正常卷积（N×C×K×K）拆分为 Depthwise Conv（C×1×K×K） 和 Pointwise Conv（N×C×1×1）。前者卷积核通道数均为 1。每个卷积后有激活层和 BN 层。\nBackbone - EfficientNetEfficientNet 是同样的作者提出的一个 backbone。作者在这篇文章里探讨了两件事：\n\nBackbone 三个不同方面的缩放：width、depth、resolution。以往为了提高精度或速度，研究一般会专注于单一的尺度上，比如 ResNet 只加深了 depth。此文作者指出三者的共同缩放更加有效，提出了缩放的平衡准则，以 ResNet 和 MobileNet 为基准进行了测试。\n\nAspects of backbone scaling\n\n\n上述放大网络的方法显然很依赖于 baseline 的表现，除了现有网络，作者以 精度 和 真实移动设备上的速度 为优化目标，使用 reinforce learning (neural architecture search) 搜索出了一个小模型 EfficientNet-B0，该模型的 ImageNet Top-1 Acc 为 77.3%，Params～FLOPS 为 5.3M 和 0.39B，对比 ResNet-50 为 76.0%～26M～4.1B。以该模型为基准，同样使用 &lt;1&gt; 中研究的放大网络方法，构建了 EfficientNet-B0～B7，测试结果如下图。\n\nAcc vs Params of different backbone\n\n总结：Neural Architecture Search 是一种很有用的设计高效网络的方法，但是只能使用在搜索域比较小的移动设备小网络上。为了增加搜索得到的小网络的精度，作者寻求于网络映射关系不变，但同时增加 width、depth、resolution 获得更大网络的方法。\ncompound scaling method理论和实验：如果输入图像更大，那么网络应该更深以得到更大的感受野，同时需要更多的通道以捕捉更多精细的信息，所以三者是相关的，以前的一些研究中这种关系的存在但是没有给出定量结果。\nScaling up model in single aspect\n\n上图给出了 EfficientNet-B0 为基准，单独增加 width 或 depth 或 resolution 网络的精度和计算量变化，可以看到三者在一定倍数后精度就饱和了。\n\n对于 width，这是由于虽然 wider 的网络更容易捕捉细节的特征且更容易训练，但 wide but shallow 的网络很难捕捉 higher level 特征；\n\n对于 depth，这是由于更深网络的梯度消失；\n\n对于 resolution 这种现象也存在，更高分辨率的输入图像并不会提供无限多的有效信息。\n\n\n所以，我们需要同时缩放三者，可以使用一个复合系数 Φ，按照下面的公式计算出放大后的 w, d, r。$$\\begin{aligned}\\text{depth:} &amp;\\ d = \\alpha^\\phi ,\\ (\\alpha \\ge 1) \\\\\\text{width:} &amp;\\ w = \\beta^\\phi ,\\ (\\beta \\ge 1) \\\\\\text{resolution:} &amp;\\ r = \\gamma^\\phi ,\\ (\\gamma \\ge 1) \\\\\\text{s.t}. &amp;\\ \\alpha \\cdot \\beta^2 \\cdot \\gamma^2 \\approx 2\\end{aligned}$$\nα, β, γ 可以通过 Grid Search 得到，是定值。Φ 是人工指定的将网络计算量增大的参数，由于卷积的计算量与 d, w2, r2 正相关，且卷积网络的 FLOPS 由卷积层主导，满足上述限制条件后，通过 Φ  即可将网络计算量调整到 2Φ 倍。\narchitecture searchNeural Architectrue Search 是近些年一种热门的获得网络结构的方法，需要一些 reinforce learning 的知识，在这里不细说。简单介绍，它需要搜索空间、优化目标，然后使用某种优化算法比如 Proximal Policy Optimization 来更新采样参数。\n对于搜索空间，意思是我们需要定义一下网络大概的样子，限制越多则搜索空间越小。在早期，搜索的空间通常只是一个小 Block，然后通过重复人工堆叠这个 Block 来构造一个网络。限制越小，则搜索难度更大但理论上得到的网络更优。但是，有一些非常通用、广泛采用的映射关系，我们是可以加入限制的，例如：\n\n一个网络应当是由几个 Block 组成，在一个 Block 内，我们重复使用一些结构；\n\n图像应当被逐步下采样，且如果一个 Block 中的分辨率与上一个不同，那么下采样应当在这个 Block 中的第一个卷积中使用 stride=2 完成；\n\n\n所以说，我们可以设定一个网络大致骨架，然后去搜索诸如层数、卷积核大小、残差结构等等，如下图所示是本文使用的搜索空间。\nFactorized Hierarchical Search Space\n\n优化目标为 ACC(m) × [FLOPS(m) / T]w，m 表示模型，T 表示目标 FLOPS，w=-0.07 是一个超参数用于平衡 ACC 和 FLOPS。我们希望在计算量限制的情况下得到最高准确率。\n这样搜索得到的网络为 EfficientNet-B0，网络结构如下表。\n\n\n\nStage\nOperator\nResolution\n#Channels\n#Layers\n\n\n\n1\nConv 3×3\n224 × 224\n32\n1\n\n\n2\nMBConv1, k3×3\n112 × 112\n16\n1\n\n\n3\nMBConv6, k3×3\n112 × 112\n24\n2\n\n\n4\nMBConv6, k5×5\n56 × 56\n40\n2\n\n\n5\nMBConv6, k3×3\n28 × 28\n80\n3\n\n\n6\nMBConv6, k5×5\n14 × 14\n112\n3\n\n\n7\nMBConv6, k5×5\n14 × 14\n192\n4\n\n\n8\nMBConv6, k3×3\n7 × 7\n320\n1\n\n\n9\nConv1×1 &amp; Pooling &amp; FC\n7 × 7\n1280\n1\n\n\n其中 MBConv 是 MobileNetV2 中的 Inverted Residuals and Linear Bottlenecks，原始结构如下。\n12345678910     Input  ──────┐              Input       ↓          |                ↓Conv 1×1, Relu6   |          Conv 1×1, Relu6       ↓          |                ↓Dwise 3×3, Relu6  |        Dwise 3×3, stride&#x3D;2,       ↓          |              Relu6Conv 1×1, Linear  |                ↓       ↓          |         Conv 1×1, Linear      Add   ←─────┘[Stride&#x3D;1 block]            [Stride&#x3D;2 block]\n\n\nInverted Residuals：Dwise Conv 提取得到的特征受限于输入的通道数，若是采用以往的 residual block，先压缩通道再卷积提特征，那么 Dwise Conv 可提取得特征就太少了。MobileNetV2 反其道而行，一开始先扩张，原文中实验扩张倍数为 6。所以通常 residual block 里面是「压缩→卷积提特征→扩张」，MobileNetV2 变成了「扩张→卷积提特征→压缩」，称为 Inverted Residuals。\n\nLinear Bottlenecks：当采用上述 Inverted Residuals 时，在压缩之后会碰到一个问题，那就是 Relu 会破坏特征：Relu对于负的输入，输出全为零。而本来特征就已经被 Conv 压缩，再经过 Relu 的话，又要损失一部分特征，因此这里不采用 Relu，称为 Linear bottlenecks。\n\nRelu6 在 x&gt;6 时值为 6 不变。\n\n\n此外，在 EfficientNet 的 MBConv 中，作者还加入了 squeeze-and-excitation optimization。\nscaling up baseline model得到 baseline 之后，现在需要进行的是放大这个网络得到更高精度，通过以下两步进行。\n\n固定放大复合系数 Φ=1，即目标将网络计算量放大两倍，进行 Grid Search，找到对于 EfficientNet-B0 的最佳系数 α=1.2, β=1.1, γ=1.15。\n\n固定 α=1.2, β=1.1, γ=1.15，使用不同的 Φ 放大整个网络，得到 EfficientNet-B1～B7。\n\n\n\n\n\nModel\nTop-1 Acc.\nTop-5 Acc.\n#Params\n#FLOPS\n\n\n\nEfficientNet-B0\n77.3%\n93.5%\n5.3M\n0.39B\n\n\nEfficientNet-B1\n79.2%\n94.5%\n7.8M\n0.70B\n\n\nEfficientNet-B2\n80.3%\n95.0%\n9.2M\n1.0B\n\n\nEfficientNet-B3\n81.7%\n95.6%\n12M\n1.8B\n\n\nEfficientNet-B4\n83.0%\n96.3%\n19M\n4.2B\n\n\nEfficientNet-B5\n83.7%\n96.7%\n30M\n9.9B\n\n\nEfficientNet-B6\n84.2%\n96.8%\n43M\n19B\n\n\nEfficientNet-B7\n84.4%\n97.1%\n66M\n37B\n\n\nScaling up EfficientDet回到 detection 中，EfficientDet 的结构图如下，Head 部分对于所有 BiFPN 层级是共享参数的。\nEfficientDet Network Architecture\n\n同样，下面来看如何放大这个网络得到更高的检测精度。\nBackbone\n这里直接使用 B0～B6 网络，以直接使用 ImageNet 预训练好的模型。\nBiFPN\n\ndepth：线性增加，因为它是一个较小的整数\n\nwidth：与 backbone 一样指数形式增加。在 {1.2, 1.25, 1.3, 1.35, 1.4, 1.45} 进行 Grid Search，得到最好结果是 1.35。\n\n\n即 \\( W_\\text{BiFPN} = 64 \\cdot (1.35^\\phi) ,\\ D_\\text{BiFPN} = 3 + \\phi \\)。\nHead\n\ndepth：\\( D_\\text{box} = D_\\text{class} = 3 + \\lfloor \\phi / 3 \\rfloor \\)\n\nwidth：与它的 BiFPN 相同\n\n\nInput Resolution\n因为 P7 缩小了 128 倍，所以输入应当能被 128 整除，线性增加输入尺寸：\\( R_\\text{input} = 512 + \\phi \\cdot 128 \\)\n综上，我们可以得到 D0～D7，如下表所示（D6 和 D7 只有输入尺寸的差别）。\n\n\n\n\nInput Size\nBackbone\nBiFPN #channels\nBiFPN #layers\nHead #layers\n\n\n\nD0 ( Φ = 0)\n512\nB0\n64\n3\n3\n\n\nD1 ( Φ = 1)\n640\nB1\n88\n4\n3\n\n\nD2 ( Φ = 2)\n768\nB2\n112\n5\n3\n\n\nD3 ( Φ = 3)\n896\nB3\n160\n6\n4\n\n\nD4 ( Φ = 4)\n1024\nB4\n224\n7\n4\n\n\nD5 ( Φ = 5)\n1280\nB5\n288\n7\n4\n\n\nD6 ( Φ = 6)\n1280\nB6\n384\n8\n5\n\n\nD7 ( Φ = 7)\n1536\nB6\n384\n8\n5\n\n\n对于精度和计算量如下图。\nAP vs FLOPS of different detector\n\n","dateCreated":"2020-05-12T00:00:00+08:00","dateModified":"2021-05-24T01:28:51+08:00","datePublished":"2020-05-12T00:00:00+08:00","description":"来自 Google Brain 的 EfficientNet 和 EfficientDet 为图像分类和检测构造了一个优质 Baseline 网络，并提出了一种放大网络的方法以速度换取更高的精度。","headline":"EfficientNet 和 EfficientDet","image":[],"mainEntityOfPage":{"@type":"WebPage","@id":"https://tangh.github.io/articles/efficientnet-and-efficientdet/"},"publisher":{"@type":"Organization","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg","logo":{"@type":"ImageObject","url":"icon.jpg"}},"url":"https://tangh.github.io/articles/efficientnet-and-efficientdet/","keywords":"Computer Vision, Deep Learning, Object Detection"}</script>
+    <meta name="description" content="来自 Google Brain 的 EfficientNet 和 EfficientDet 为图像分类和检测构造了一个优质 Baseline 网络，并提出了一种放大网络的方法以速度换取更高的精度。">
+<meta property="og:type" content="blog">
+<meta property="og:title" content="EfficientNet 和 EfficientDet">
+<meta property="og:url" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;articles&#x2F;efficientnet-and-efficientdet&#x2F;">
+<meta property="og:site_name" content="雨天等放晴">
+<meta property="og:description" content="来自 Google Brain 的 EfficientNet 和 EfficientDet 为图像分类和检测构造了一个优质 Baseline 网络，并提出了一种放大网络的方法以速度换取更高的精度。">
+<meta property="og:locale" content="en_US">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;neck-panet.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;neck-panet-details.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;efficientdet-neck-structure-compare.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;efficientnet-backbone-scaling.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;efficientnet-backbone-acc-params.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;efficientnet-single-sclae-up.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;efficientnet-search-space.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;efficientdet-network-architecture.png">
+<meta property="og:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;efficientdet-coco-ap-flops.png">
+<meta property="article:published_time" content="2020-05-11T16:00:00.000Z">
+<meta property="article:modified_time" content="2021-05-23T17:28:51.052Z">
+<meta property="article:author" content="Tang Huan">
+<meta property="article:tag" content="EfficientNet">
+<meta property="article:tag" content="EfficientDet">
+<meta property="article:tag" content="PANet">
+<meta property="article:tag" content="BiFPN">
+<meta property="article:tag" content="Backbone">
+<meta property="article:tag" content="Object Detection">
+<meta property="article:tag" content="目标检测">
+<meta property="article:tag" content="目標檢測">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https:&#x2F;&#x2F;d2y8c08sxwbp8v.cloudfront.net&#x2F;2020-detection&#x2F;neck-panet.png">
+    
+    
+        
+    
+    
+        <meta property="og:image" content="https://tangh.github.io/assets/images/icon.jpg"/>
+    
+    
+    
+    
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
+    <!--STYLES-->
+    
+<link rel="stylesheet" href="/assets/css/style-iaetwm81hfopcuajcp7qnh2zsnqn4dhiu3nftuj79wdhe7fie6l4r0thrs6g.min.css">
+
+    <!--STYLES END-->
+    
+    <script async src="https://www.googletagmanager.com/gtag/js?id=UA-137837052-1"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'UA-137837052-1');
+    </script><!-- hexo-inject:begin --><!-- hexo-inject:end -->
+
+
+    
+
+</head>
+
+    <body>
+        <!-- hexo-inject:begin --><!-- hexo-inject:end --><div id="blog">
+            <!-- Define author's picture -->
+
+
+    
+        
+            
+        
+    
+
+<header id="header" data-behavior="4">
+    <i id="btn-open-sidebar" class="fa fa-lg fa-bars"></i>
+    <div class="header-title">
+        <a
+            class="header-title-link"
+            href="/"
+            aria-label=""
+        >
+            雨天等放晴
+        </a>
+    </div>
+    
+        
+            <a
+                class="header-right-picture "
+                href="#about"
+                aria-label="Open the link: /#about"
+            >
+        
+        
+            <img class="header-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+        </a>
+    
+</header>
+
+            <!-- Define author's picture -->
+
+
+
+        
+    
+
+<nav id="sidebar" data-behavior="4">
+    <div class="sidebar-container">
+        
+            <div class="sidebar-profile">
+                <a
+                    href="/#about"
+                    aria-label="Read more about the author"
+                >
+                    <img class="sidebar-profile-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+                </a>
+                <h4 class="sidebar-profile-name">Tang Huan</h4>
+                
+                    <h5 class="sidebar-profile-bio"></h5>
+                
+            </div>
+        
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/"
+                            
+                            rel="noopener"
+                            title="Home"
+                        >
+                        <i class="sidebar-button-icon fa fa-home" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Home</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-categories"
+                            
+                            rel="noopener"
+                            title="Categories"
+                        >
+                        <i class="sidebar-button-icon fa fa-bookmark" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Categories</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-tags"
+                            
+                            rel="noopener"
+                            title="Tags"
+                        >
+                        <i class="sidebar-button-icon fa fa-tags" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Tags</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/all-archives"
+                            
+                            rel="noopener"
+                            title="Archives"
+                        >
+                        <i class="sidebar-button-icon fa fa-archive" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Archives</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="/about"
+                            
+                            rel="noopener"
+                            title="About"
+                        >
+                        <i class="sidebar-button-icon fas fa-cube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">About</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+            <ul class="sidebar-buttons">
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://twitter.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Twitter"
+                        >
+                        <i class="sidebar-button-icon fab fa-twitter" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Twitter</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.flickr.com/photos/135277712@N07/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Flickr"
+                        >
+                        <i class="sidebar-button-icon fab fa-flickr" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Flickr</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.instagram.com/tanghrtx/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="Instagram"
+                        >
+                        <i class="sidebar-button-icon fab fa-instagram" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">Instagram</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="YouTube"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">YouTube</span>
+                    </a>
+            </li>
+            
+                <li class="sidebar-button">
+                    
+                        <a
+                            class="sidebar-button-link "
+                            href="https://space.bilibili.com/634428/"
+                            
+                                target="_blank"
+                            
+                            rel="noopener"
+                            title="BiliBili"
+                        >
+                        <i class="sidebar-button-icon fab fa-youtube-square" aria-hidden="true"></i>
+                        <span class="sidebar-button-desc">BiliBili</span>
+                    </a>
+            </li>
+            
+        </ul>
+        
+    </div>
+</nav>
+
+            
+            <div id="main" data-behavior="4"
+                 class="
+                        hasCoverMetaIn
+                        ">
+                
+<article class="post">
+    
+    
+        <div class="post-header main-content-wrap text-center">
+    
+        <h1 class="post-title">
+            EfficientNet 和 EfficientDet
+        </h1>
+    
+    
+        <div class="post-meta">
+    <time datetime="2020-05-12T00:00:00+08:00">
+	
+		    May 12, 2020
+    	
+    </time>
+    
+        <span>in </span>
+        
+    <a class="category-link" href="/categories/Computer-Science/">Computer Science</a>, <a class="category-link" href="/categories/Computer-Science/Deep-Learning/">Deep Learning</a>
+
+
+    
+</div>
+
+    
+</div>
+
+    
+    
+        <div class="post-content markdown">
+    
+        <div class="main-content-wrap">
+            <!-- excerpt -->
+
+
+<p><a href="https://arxiv.org/abs/1911.09070" target="_blank" rel="noopener">EfficientNet (CVPR 2020)</a> 是一个单级检测框架，构建在 <a href="https://arxiv.org/abs/1905.11946" target="_blank" rel="noopener">EfficientNet (ICML 2019)</a> Backbone 之上，加上以下两点 Detector 部分的创新：</p>
+<ol>
+<li><p>BiFPN (weighted bi-directional feature pyramid network)：融合多尺度特征。以往的 FPN 相关研究中，特征融合是通过简单相加来融合，意味着每个特征图的权重相等。然而不同分辨率的特征对结果的贡献不同，这里引入一个可学习权重。此外，通过重复的 top-down 和 bottom-up 结构使特征更有效流动。</p>
+</li>
+<li><p>Scaling method：对所有的 backbone、neck、head 联合调整特征图大小、宽度、深度。且以往一般通过更大的 backbone 和更大的 input size 来提高精度，但是发现增大 neck 和 head 同样很关键。</p>
+</li>
+</ol>
+<p>注重速度，同时注重提供大范围内的速度—精度调整。精度最好结果为 52.2 AP (COCO test-dev) 52M 325B FLOPs。这篇文章以 Detector 的各个部分来看 EfficientDet 这篇文章，在 backbone 部分会分析 EfficientNet 这篇文章。</p>
+<h1 id="table-of-contents">Table of Contents</h1><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#Neck-BiFPN"><span class="toc-text">Neck - BiFPN</span></a></li><li class="toc-item toc-level-1"><a class="toc-link" href="#Backbone-EfficientNet"><span class="toc-text">Backbone - EfficientNet</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#compound-scaling-method"><span class="toc-text">compound scaling method</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#architecture-search"><span class="toc-text">architecture search</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#scaling-up-baseline-model"><span class="toc-text">scaling up baseline model</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#Scaling-up-EfficientDet"><span class="toc-text">Scaling up EfficientDet</span></a></li></ol>
+
+
+
+<h1 id="Neck-BiFPN"><a href="#Neck-BiFPN" class="headerlink" title="Neck - BiFPN"></a>Neck - BiFPN</h1><p>先简要介绍 PANet，如下图，PANet 主要在 neck 部分增加了自下而上的一支（Bottom-up path augmentation）；以及改进了特征重采样的方式（Adaptive feature pooling），聚合每个特征层次上的每个 RoI，避免任意分配的结果；以及使用一个小型 fc 层用于补充 mask 预测，互补作用。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/neck-panet.png" target="_blank" rel="noopener" title="PANet framework" data-caption="PANet framework" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/neck-panet.png" alt="PANet framework"></a><span class="caption">PANet framework</span></div><div style="clear:both;"></div>
+
+<p>增加 Bottom-up 分支是为了 low-layer information 更容易传播，以往需要穿过整个 backbone（红色箭头），经过的层数非常多，现在可以通过绿色箭头的路径经过几层就达到深层，使得特征可以更有效流动。连接方式是纵向 <code>3 × 3, s = 2</code> 卷积 -&gt; 横向相加 -&gt; 纵向 <code>3 × 3</code> 卷积。</p>
+<p>在FPN中，依据 RoI 的大小将 RoI 分配到不同特征层次。这样小面积的 RoI 分配到 low-level，大的 RoI 分配到 high-level，虽然简单有效，但可能会产生非最优结果。例如两个具有 10 个像素差的 RoI 可能分配到不同特征层次，而实际上这两个 RoI 非常相似。特征的重要性可能与他们所属的特征层次没有太大关系：high-level 特征具有大的感受野并捕获了丰富的上下文信息，允许小 RoI 获取这些特征，能更好地使用上下文信息做预测；low-level 特征具有许多微小细节和高定位精度，允许大 RoI 获取这些特征显然也是有益的。融合操作可以采用 element-wise <em>max</em> or <em>sum</em>。注意融合不是在 RoIAlign 之后立即进行，而是经过一个 fc(box head) 或一个 conv(mask head) 之后才进行。</p>
+<p>对于 fc mask pred，从 mask head 的 conv3 引出。fc 对于位置敏感而 conv 基于一个局部信息，它们是互补的，所以引入 fc 有助于提升 mask 精度。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/neck-panet-details.png" target="_blank" rel="noopener" title="PANet framework details" data-caption="PANet framework details" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/neck-panet-details.png" alt="PANet framework details"></a><span class="caption">PANet framework details</span></div><div style="clear:both;"></div>
+
+<br/>
+
+<p>下图 （f）是 BiFPN 的结构图，它与 PANet（b）同样有一条额外的 bottom-up path，使得特征可以双向流动（bi-directional）而不是原始 FPN 中的单向流动。比起 PANet，BiFPN 有以下几个区别：</p>
+<ol>
+<li><p>去掉了只有一个输入 edge 的节点（共两个）：如果某一个节点只有一条输入 edge，那么它对特征融合（网络）中贡献较小。</p>
+</li>
+<li><p>增加了从原始输入到输出节点的 edge：融合更多的特征，又不增大太多开销。</p>
+</li>
+<li><p>虚线框内的部分是可重复的，根据整个网络的规模叠加不同的个数。</p>
+</li>
+</ol>
+<p>下图中（c）是 NAS-FPN，它的结构是通过网络自动学习设计生成的，虽然它的计算量相对 PANet 较小，但是计算出这样一个结构需要花费大量的时间，同时结果不规则且难以解释。图（d/e）是作者探索的两种其它结构。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/efficientdet-neck-structure-compare.png" target="_blank" rel="noopener" title="Different Necks of Detection Network" data-caption="Different Necks of Detection Network" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/efficientdet-neck-structure-compare.png" alt="Different Necks of Detection Network"></a><span class="caption">Different Necks of Detection Network</span></div><div style="clear:both;"></div>
+
+<p>同时，如最开始提到，与上面各种其它方法均不同的是，BiFPN 中特征图加和是带有权重的。也就是 \( O=\sum_i w_i \cdot I_i \)，其中 \( w_i \) 可以是一个标量（对应于每个特征图一个不同权重）或是一个矢量（对应于每个通道一个不同权重）或是一个张量（对应于每个像素一个不同权重）。实验发现使用标量效果就比较好了，但是直接使用的话由于 \( w_i \) 没有限制，容易造成训练不稳定。比较直接的想法是对所有权重使用 Softmax，这样权重之和为 <code>1</code>，但是实验发现 Softmax 会使 GPU 计算时间增大，性能下降。所以作者提出了一种快速 normalize 方法：</p>
+<p>$$<br>O = \sum_i \frac{w_i}{\epsilon + \sum_j w_j} \cdot I_i<br>$$</p>
+<p>为保证每个权重值 <code>&gt;0</code>，所以每个权重需要使用 ReLU，<code>epsilon = 0.0001</code>。实验得到这种方法精度与 Softmax 相同但是速度提高 30%。</p>
+<p>具体的连接方式如下，以 <code>P6</code> 为例，其它类似。其中 \( P_6^{in} ,\ P_6^{td} ,\ P_6^{out} \) 分别是输入、中间、输出节点。</p>
+<p>$$<br>P_6^{td} = Conv \left( \frac<br>{w_1 \cdot P_6^{in} + w_2 \cdot Resize(P_7^{in})}<br>{w_1 + w_2 + \epsilon}<br>\right)<br>$$</p>
+<p>$$<br>P_6^{out} = Conv \left( \frac<br>{w_1’ \cdot P_6^{in} + w_2’ \cdot P_6^{td} + w_3’ \cdot Resize(P_5^{out})}<br>{w_1’ + w_2’ + w_3’ + \epsilon}<br>\right)<br>$$</p>
+<p>为了节省计算量，这里的卷积是 depthwise separable convolution，即把正常卷积（N×C×K×K）拆分为 Depthwise Conv（C×1×K×K） 和 Pointwise Conv（N×C×1×1）。前者卷积核通道数均为 <code>1</code>。每个卷积后有激活层和 BN 层。</p>
+<h1 id="Backbone-EfficientNet"><a href="#Backbone-EfficientNet" class="headerlink" title="Backbone - EfficientNet"></a>Backbone - EfficientNet</h1><p>EfficientNet 是同样的作者提出的一个 backbone。作者在这篇文章里探讨了两件事：</p>
+<ol>
+<li>Backbone 三个不同方面的缩放：width、depth、resolution。以往为了提高精度或速度，研究一般会专注于单一的尺度上，比如 ResNet 只加深了 depth。此文作者指出三者的共同缩放更加有效，提出了缩放的平衡准则，以 ResNet 和 MobileNet 为基准进行了测试。</li>
+</ol>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/efficientnet-backbone-scaling.png" target="_blank" rel="noopener" title="Aspects of backbone scaling" data-caption="Aspects of backbone scaling" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/efficientnet-backbone-scaling.png" alt="Aspects of backbone scaling"></a><span class="caption">Aspects of backbone scaling</span></div><div style="clear:both;"></div>
+
+<ol start="2">
+<li>上述放大网络的方法显然很依赖于 baseline 的表现，除了现有网络，作者以 精度 和 真实移动设备上的速度 为优化目标，使用 reinforce learning (neural architecture search) 搜索出了一个小模型 EfficientNet-B0，该模型的 ImageNet Top-1 Acc 为 <code>77.3%</code>，Params～FLOPS 为 <code>5.3M</code> 和 <code>0.39B</code>，对比 ResNet-50 为 <code>76.0%～26M～4.1B</code>。以该模型为基准，同样使用 &lt;1&gt; 中研究的放大网络方法，构建了 EfficientNet-B0～B7，测试结果如下图。</li>
+</ol>
+<div class="figure center" style="width:75%;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/efficientnet-backbone-acc-params.png" target="_blank" rel="noopener" title="Acc vs Params of different backbone" data-caption="Acc vs Params of different backbone" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/efficientnet-backbone-acc-params.png" style="width:75%;"alt="Acc vs Params of different backbone"></a><span class="caption">Acc vs Params of different backbone</span></div><div style="clear:both;"></div>
+
+<p>总结：Neural Architecture Search 是一种很有用的设计高效网络的方法，但是只能使用在搜索域比较小的移动设备小网络上。为了增加搜索得到的小网络的精度，作者寻求于网络映射关系不变，但同时增加 width、depth、resolution 获得更大网络的方法。</p>
+<h2 id="compound-scaling-method"><a href="#compound-scaling-method" class="headerlink" title="compound scaling method"></a>compound scaling method</h2><p>理论和实验：如果输入图像更大，那么网络应该更深以得到更大的感受野，同时需要更多的通道以捕捉更多精细的信息，所以三者是相关的，以前的一些研究中这种关系的存在但是没有给出定量结果。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/efficientnet-single-sclae-up.png" target="_blank" rel="noopener" title="Scaling up model in single aspect" data-caption="Scaling up model in single aspect" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/efficientnet-single-sclae-up.png" alt="Scaling up model in single aspect"></a><span class="caption">Scaling up model in single aspect</span></div><div style="clear:both;"></div>
+
+<p>上图给出了 EfficientNet-B0 为基准，单独增加 width 或 depth 或 resolution 网络的精度和计算量变化，可以看到三者在一定倍数后精度就饱和了。</p>
+<ul>
+<li><p>对于 width，这是由于虽然 wider 的网络更容易捕捉细节的特征且更容易训练，但 wide but shallow 的网络很难捕捉 higher level 特征；</p>
+</li>
+<li><p>对于 depth，这是由于更深网络的梯度消失；</p>
+</li>
+<li><p>对于 resolution 这种现象也存在，更高分辨率的输入图像并不会提供无限多的有效信息。</p>
+</li>
+</ul>
+<p>所以，我们需要同时缩放三者，可以使用一个复合系数 <code>Φ</code>，按照下面的公式计算出放大后的 <code>w, d, r</code>。<br>$$<br>\begin{aligned}<br>\text{depth:} &amp;\ d = \alpha^\phi ,\ (\alpha \ge 1) \\<br>\text{width:} &amp;\ w = \beta^\phi ,\ (\beta \ge 1) \\<br>\text{resolution:} &amp;\ r = \gamma^\phi ,\ (\gamma \ge 1) \\<br>\text{s.t}. &amp;\ \alpha \cdot \beta^2 \cdot \gamma^2 \approx 2<br>\end{aligned}<br>$$</p>
+<p><code>α, β, γ</code> 可以通过 Grid Search 得到，是定值。<code>Φ</code> 是人工指定的将网络计算量增大的参数，由于卷积的计算量与 d, w<sup>2</sup>, r<sup>2</sup> 正相关，且卷积网络的 FLOPS 由卷积层主导，满足上述限制条件后，通过 <code>Φ</code>  即可将网络计算量调整到 2<sup>Φ</sup> 倍。</p>
+<h2 id="architecture-search"><a href="#architecture-search" class="headerlink" title="architecture search"></a>architecture search</h2><p><em>Neural Architectrue Search</em> 是近些年一种热门的获得网络结构的方法，需要一些 reinforce learning 的知识，在这里不细说。简单介绍，它需要搜索空间、优化目标，然后使用某种优化算法比如 <a href="https://arxiv.org/abs/1707.06347" target="_blank" rel="noopener">Proximal Policy Optimization</a> 来更新采样参数。</p>
+<p>对于搜索空间，意思是我们需要定义一下网络大概的样子，限制越多则搜索空间越小。在早期，搜索的空间通常只是一个小 Block，然后通过重复人工堆叠这个 Block 来构造一个网络。限制越小，则搜索难度更大但理论上得到的网络更优。但是，有一些非常通用、广泛采用的映射关系，我们是可以加入限制的，例如：</p>
+<ul>
+<li><p>一个网络应当是由几个 Block 组成，在一个 Block 内，我们重复使用一些结构；</p>
+</li>
+<li><p>图像应当被逐步下采样，且如果一个 Block 中的分辨率与上一个不同，那么下采样应当在这个 Block 中的第一个卷积中使用 stride=2 完成；</p>
+</li>
+</ul>
+<p>所以说，我们可以设定一个网络大致骨架，然后去搜索诸如层数、卷积核大小、残差结构等等，如下图所示是本文使用的搜索空间。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/efficientnet-search-space.png" target="_blank" rel="noopener" title="Factorized Hierarchical Search Space" data-caption="Factorized Hierarchical Search Space" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/efficientnet-search-space.png" alt="Factorized Hierarchical Search Space"></a><span class="caption">Factorized Hierarchical Search Space</span></div><div style="clear:both;"></div>
+
+<p>优化目标为 ACC(m) × [FLOPS(m) / T]<sup>w</sup>，m 表示模型，T 表示目标 FLOPS，w=-0.07 是一个超参数用于平衡 ACC 和 FLOPS。我们希望在计算量限制的情况下得到最高准确率。</p>
+<p>这样搜索得到的网络为 EfficientNet-B0，网络结构如下表。</p>
+<table>
+<thead>
+<tr>
+<th align="center">Stage</th>
+<th align="center">Operator</th>
+<th align="center">Resolution</th>
+<th align="center">#Channels</th>
+<th align="center">#Layers</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="center">1</td>
+<td align="center">Conv 3×3</td>
+<td align="center">224 × 224</td>
+<td align="center">32</td>
+<td align="center">1</td>
+</tr>
+<tr>
+<td align="center">2</td>
+<td align="center">MBConv1, k3×3</td>
+<td align="center">112 × 112</td>
+<td align="center">16</td>
+<td align="center">1</td>
+</tr>
+<tr>
+<td align="center">3</td>
+<td align="center">MBConv6, k3×3</td>
+<td align="center">112 × 112</td>
+<td align="center">24</td>
+<td align="center">2</td>
+</tr>
+<tr>
+<td align="center">4</td>
+<td align="center">MBConv6, k5×5</td>
+<td align="center">56 × 56</td>
+<td align="center">40</td>
+<td align="center">2</td>
+</tr>
+<tr>
+<td align="center">5</td>
+<td align="center">MBConv6, k3×3</td>
+<td align="center">28 × 28</td>
+<td align="center">80</td>
+<td align="center">3</td>
+</tr>
+<tr>
+<td align="center">6</td>
+<td align="center">MBConv6, k5×5</td>
+<td align="center">14 × 14</td>
+<td align="center">112</td>
+<td align="center">3</td>
+</tr>
+<tr>
+<td align="center">7</td>
+<td align="center">MBConv6, k5×5</td>
+<td align="center">14 × 14</td>
+<td align="center">192</td>
+<td align="center">4</td>
+</tr>
+<tr>
+<td align="center">8</td>
+<td align="center">MBConv6, k3×3</td>
+<td align="center">7 × 7</td>
+<td align="center">320</td>
+<td align="center">1</td>
+</tr>
+<tr>
+<td align="center">9</td>
+<td align="center">Conv1×1 &amp; Pooling &amp; FC</td>
+<td align="center">7 × 7</td>
+<td align="center">1280</td>
+<td align="center">1</td>
+</tr>
+</tbody></table>
+<p>其中 MBConv 是 MobileNetV2 中的 Inverted Residuals and Linear Bottlenecks，原始结构如下。</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">     Input  ──────┐              Input</span><br><span class="line">       ↓          |                ↓</span><br><span class="line">Conv 1×1, Relu6   |          Conv 1×1, Relu6</span><br><span class="line">       ↓          |                ↓</span><br><span class="line">Dwise 3×3, Relu6  |        Dwise 3×3, stride&#x3D;2,</span><br><span class="line">       ↓          |              Relu6</span><br><span class="line">Conv 1×1, Linear  |                ↓</span><br><span class="line">       ↓          |         Conv 1×1, Linear</span><br><span class="line">      Add   ←─────┘</span><br><span class="line">[Stride&#x3D;1 block]            [Stride&#x3D;2 block]</span><br></pre></td></tr></table></figure>
+
+<ul>
+<li><p>Inverted Residuals：Dwise Conv 提取得到的特征受限于输入的通道数，若是采用以往的 residual block，先压缩通道再卷积提特征，那么 Dwise Conv 可提取得特征就太少了。MobileNetV2 反其道而行，一开始先扩张，原文中实验扩张倍数为 <code>6</code>。所以通常 residual block 里面是「压缩→卷积提特征→扩张」，MobileNetV2 变成了「扩张→卷积提特征→压缩」，称为 Inverted Residuals。</p>
+</li>
+<li><p>Linear Bottlenecks：当采用上述 Inverted Residuals 时，在压缩之后会碰到一个问题，那就是 Relu 会破坏特征：Relu对于负的输入，输出全为零。而本来特征就已经被 Conv 压缩，再经过 Relu 的话，又要损失一部分特征，因此这里不采用 Relu，称为 Linear bottlenecks。</p>
+</li>
+<li><p>Relu6 在 <code>x&gt;6</code> 时值为 <code>6</code> 不变。</p>
+</li>
+</ul>
+<p>此外，在 EfficientNet 的 MBConv 中，作者还加入了 squeeze-and-excitation optimization。</p>
+<h2 id="scaling-up-baseline-model"><a href="#scaling-up-baseline-model" class="headerlink" title="scaling up baseline model"></a>scaling up baseline model</h2><p>得到 baseline 之后，现在需要进行的是放大这个网络得到更高精度，通过以下两步进行。</p>
+<ol>
+<li><p>固定放大复合系数 <code>Φ=1</code>，即目标将网络计算量放大两倍，进行 <em>Grid Search</em>，找到对于 EfficientNet-B0 的最佳系数 <code>α=1.2, β=1.1, γ=1.15</code>。</p>
+</li>
+<li><p>固定 <code>α=1.2, β=1.1, γ=1.15</code>，使用不同的 <code>Φ</code> 放大整个网络，得到 EfficientNet-B1～B7。</p>
+</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th align="center">Model</th>
+<th align="center">Top-1 Acc.</th>
+<th align="center">Top-5 Acc.</th>
+<th align="center">#Params</th>
+<th align="center">#FLOPS</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="center">EfficientNet-B0</td>
+<td align="center">77.3%</td>
+<td align="center">93.5%</td>
+<td align="center">5.3M</td>
+<td align="center">0.39B</td>
+</tr>
+<tr>
+<td align="center">EfficientNet-B1</td>
+<td align="center">79.2%</td>
+<td align="center">94.5%</td>
+<td align="center">7.8M</td>
+<td align="center">0.70B</td>
+</tr>
+<tr>
+<td align="center">EfficientNet-B2</td>
+<td align="center">80.3%</td>
+<td align="center">95.0%</td>
+<td align="center">9.2M</td>
+<td align="center">1.0B</td>
+</tr>
+<tr>
+<td align="center">EfficientNet-B3</td>
+<td align="center">81.7%</td>
+<td align="center">95.6%</td>
+<td align="center">12M</td>
+<td align="center">1.8B</td>
+</tr>
+<tr>
+<td align="center">EfficientNet-B4</td>
+<td align="center">83.0%</td>
+<td align="center">96.3%</td>
+<td align="center">19M</td>
+<td align="center">4.2B</td>
+</tr>
+<tr>
+<td align="center">EfficientNet-B5</td>
+<td align="center">83.7%</td>
+<td align="center">96.7%</td>
+<td align="center">30M</td>
+<td align="center">9.9B</td>
+</tr>
+<tr>
+<td align="center">EfficientNet-B6</td>
+<td align="center">84.2%</td>
+<td align="center">96.8%</td>
+<td align="center">43M</td>
+<td align="center">19B</td>
+</tr>
+<tr>
+<td align="center">EfficientNet-B7</td>
+<td align="center">84.4%</td>
+<td align="center">97.1%</td>
+<td align="center">66M</td>
+<td align="center">37B</td>
+</tr>
+</tbody></table>
+<h1 id="Scaling-up-EfficientDet"><a href="#Scaling-up-EfficientDet" class="headerlink" title="Scaling up EfficientDet"></a>Scaling up EfficientDet</h1><p>回到 detection 中，EfficientDet 的结构图如下，Head 部分对于所有 BiFPN 层级是共享参数的。</p>
+<div class="figure center" style="width:;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/efficientdet-network-architecture.png" target="_blank" rel="noopener" title="EfficientDet Network Architecture" data-caption="EfficientDet Network Architecture" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/efficientdet-network-architecture.png" alt="EfficientDet Network Architecture"></a><span class="caption">EfficientDet Network Architecture</span></div><div style="clear:both;"></div>
+
+<p>同样，下面来看如何放大这个网络得到更高的检测精度。</p>
+<p><strong>Backbone</strong></p>
+<p>这里直接使用 B0～B6 网络，以直接使用 ImageNet 预训练好的模型。</p>
+<p><strong>BiFPN</strong></p>
+<ul>
+<li><p>depth：线性增加，因为它是一个较小的整数</p>
+</li>
+<li><p>width：与 backbone 一样指数形式增加。在 <code>{1.2, 1.25, 1.3, 1.35, 1.4, 1.45}</code> 进行 Grid Search，得到最好结果是 <code>1.35</code>。</p>
+</li>
+</ul>
+<p>即 \( W_\text{BiFPN} = 64 \cdot (1.35^\phi) ,\ D_\text{BiFPN} = 3 + \phi \)。</p>
+<p><strong>Head</strong></p>
+<ul>
+<li><p>depth：\( D_\text{box} = D_\text{class} = 3 + \lfloor \phi / 3 \rfloor \)</p>
+</li>
+<li><p>width：与它的 BiFPN 相同</p>
+</li>
+</ul>
+<p><strong>Input Resolution</strong></p>
+<p>因为 P7 缩小了 128 倍，所以输入应当能被 128 整除，线性增加输入尺寸：\( R_\text{input} = 512 + \phi \cdot 128 \)</p>
+<p>综上，我们可以得到 D0～D7，如下表所示（D6 和 D7 只有输入尺寸的差别）。</p>
+<table>
+<thead>
+<tr>
+<th align="center"></th>
+<th align="center">Input Size</th>
+<th align="center">Backbone</th>
+<th align="center">BiFPN #channels</th>
+<th align="center">BiFPN #layers</th>
+<th align="center">Head #layers</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="center">D0 ( Φ = 0)</td>
+<td align="center">512</td>
+<td align="center">B0</td>
+<td align="center">64</td>
+<td align="center">3</td>
+<td align="center">3</td>
+</tr>
+<tr>
+<td align="center">D1 ( Φ = 1)</td>
+<td align="center">640</td>
+<td align="center">B1</td>
+<td align="center">88</td>
+<td align="center">4</td>
+<td align="center">3</td>
+</tr>
+<tr>
+<td align="center">D2 ( Φ = 2)</td>
+<td align="center">768</td>
+<td align="center">B2</td>
+<td align="center">112</td>
+<td align="center">5</td>
+<td align="center">3</td>
+</tr>
+<tr>
+<td align="center">D3 ( Φ = 3)</td>
+<td align="center">896</td>
+<td align="center">B3</td>
+<td align="center">160</td>
+<td align="center">6</td>
+<td align="center">4</td>
+</tr>
+<tr>
+<td align="center">D4 ( Φ = 4)</td>
+<td align="center">1024</td>
+<td align="center">B4</td>
+<td align="center">224</td>
+<td align="center">7</td>
+<td align="center">4</td>
+</tr>
+<tr>
+<td align="center">D5 ( Φ = 5)</td>
+<td align="center">1280</td>
+<td align="center">B5</td>
+<td align="center">288</td>
+<td align="center">7</td>
+<td align="center">4</td>
+</tr>
+<tr>
+<td align="center">D6 ( Φ = 6)</td>
+<td align="center">1280</td>
+<td align="center">B6</td>
+<td align="center">384</td>
+<td align="center">8</td>
+<td align="center">5</td>
+</tr>
+<tr>
+<td align="center">D7 ( Φ = 7)</td>
+<td align="center">1536</td>
+<td align="center">B6</td>
+<td align="center">384</td>
+<td align="center">8</td>
+<td align="center">5</td>
+</tr>
+</tbody></table>
+<p>对于精度和计算量如下图。</p>
+<div class="figure center" style="width:75%;"><a class="fancybox" href="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/efficientdet-coco-ap-flops.png" target="_blank" rel="noopener" title="AP vs FLOPS of different detector" data-caption="AP vs FLOPS of different detector" data-fancybox="default"><img class="fig-img" src="https://d2y8c08sxwbp8v.cloudfront.net/2020-detection/efficientdet-coco-ap-flops.png" style="width:75%;"alt="AP vs FLOPS of different detector"></a><span class="caption">AP vs FLOPS of different detector</span></div><div style="clear:both;"></div>
+
+<br/>
+            
+
+
+        </div>
+    </div>
+    <div id="post-footer" class="post-footer main-content-wrap">
+        
+            <div class="post-footer-tags">
+                <span class="text-color-light text-small">TAGGED IN</span><br/>
+                
+    <a class="tag tag--primary tag--small t-link" href="/tags/Computer-Vision/" rel="tag">Computer Vision</a> <a class="tag tag--primary tag--small t-link" href="/tags/Deep-Learning/" rel="tag">Deep Learning</a> <a class="tag tag--primary tag--small t-link" href="/tags/Object-Detection/" rel="tag">Object Detection</a>
+
+            </div>
+        
+        
+            <div class="post-actions-wrap">
+    <nav>
+        <ul class="post-actions post-action-nav">
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/improvements-of-regressor-in-detector/"
+                    data-tooltip="目標檢測中定位準確性的改進方法"
+                    aria-label="PREVIOUS: 目標檢測中定位準確性的改進方法"
+                >
+                    
+                        <i class="fa fa-angle-left" aria-hidden="true"></i>
+                        <span class="hide-xs hide-sm text-small icon-ml">PREVIOUS</span>
+                    </a>
+            </li>
+            <li class="post-action">
+                
+                    
+                <a
+                    class="post-action-btn btn btn--default tooltip--top"
+                    href="/articles/yolo-from-v1-to-v4/"
+                    data-tooltip="实时目标检测方法 YOLO — 从 V1 到 V4"
+                    aria-label="NEXT: 实时目标检测方法 YOLO — 从 V1 到 V4"
+                >
+                    
+                        <span class="hide-xs hide-sm text-small icon-mr">NEXT</span>
+                        <i class="fa fa-angle-right" aria-hidden="true"></i>
+                    </a>
+            </li>
+        </ul>
+    </nav>
+    <ul class="post-actions post-action-share">
+        <li class="post-action hide-lg hide-md hide-sm">
+            <a
+                class="post-action-btn btn btn--default btn-open-shareoptions"
+                href="#btn-open-shareoptions"
+                aria-label="Share this post"
+            >
+                <i class="fa fa-share-alt" aria-hidden="true"></i>
+            </a>
+        </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/efficientnet-and-efficientdet/"
+                    title="Share on Facebook"
+                    aria-label="Share on Facebook"
+                >
+                    <i class="fab fa-facebook" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/efficientnet-and-efficientdet/"
+                    title="Share on Twitter"
+                    aria-label="Share on Twitter"
+                >
+                    <i class="fab fa-twitter" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/efficientnet-and-efficientdet/"
+                    title="Share on Weibo"
+                    aria-label="Share on Weibo"
+                >
+                    <i class="fab fa-weibo" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+            
+            
+            <li class="post-action hide-xs">
+                <a
+                    class="post-action-btn btn btn--default"
+                    target="new" href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/efficientnet-and-efficientdet/&amp;title=EfficientNet 和 EfficientDet"
+                    title="Share on QQ"
+                    aria-label="Share on QQ"
+                >
+                    <i class="fab fa-qq" aria-hidden="true"></i>
+                </a>
+            </li>
+        
+        
+            
+                <li class="post-action">
+                    <a
+                        class="post-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                        <i class="fa fa-comment"></i>
+                    </a>
+                </li>
+            
+        
+        <li class="post-action">
+            
+                <a class="post-action-btn btn btn--default" href="#table-of-contents" aria-label="Table of Contents">
+            
+                <i class="fa fa-list" aria-hidden="true"></i>
+            </a>
+        </li>
+    </ul>
+</div>
+
+
+        
+        
+            
+                <div id="gitalk"></div>
+
+            
+        
+    </div>
+</article>
+
+
+
+                <footer id="footer" class="main-content-wrap">
+    <span class="copyrights">
+        Copyrights &copy; 2021 Tang Huan. All Rights Reserved.
+    </span>
+</footer>
+
+            </div>
+            
+                <div id="bottom-bar" class="post-bottom-bar" data-behavior="4">
+                    <div class="post-bar-actions-wrap">
+    <div class="post-actions post-action-share">
+        <div class="post-action">
+            
+                <a class="post-bar-action-btn btn btn--default" href="#table-of-contents" aria-label="Table of Contents">
+            
+                <i class="fas fa-angle-up" aria-hidden="true"></i>
+            </a>
+        </div>
+        
+            
+                <div class="post-action">
+                    <a 
+                        class="post-bar-action-btn btn btn--default"
+                        href="#gitalk"
+                        aria-label="Leave a comment"
+                    >
+                         <i class="fas fa-angle-down"></i>
+                    </a>
+                </div>
+            
+        
+    </div>
+</div>
+                </div>
+                
+    <div id="share-options-bar" class="share-options-bar" data-behavior="4">
+        <i id="btn-close-shareoptions" class="fa fa-times"></i>
+        <ul class="share-options">
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://www.facebook.com/sharer/sharer.php?u=https://tangh.github.io/articles/efficientnet-and-efficientdet/"
+                        aria-label="Share on Facebook"
+                    >
+                        <i class="fab fa-facebook" aria-hidden="true"></i><span>Share on Facebook</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="https://twitter.com/intent/tweet?text=https://tangh.github.io/articles/efficientnet-and-efficientdet/"
+                        aria-label="Share on Twitter"
+                    >
+                        <i class="fab fa-twitter" aria-hidden="true"></i><span>Share on Twitter</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://service.weibo.com/share/share.php?&amp;title=https://tangh.github.io/articles/efficientnet-and-efficientdet/"
+                        aria-label="Share on Weibo"
+                    >
+                        <i class="fab fa-weibo" aria-hidden="true"></i><span>Share on Weibo</span>
+                    </a>
+                </li>
+            
+                
+                
+                <li class="share-option">
+                    <a
+                        class="share-option-btn"
+                        target="new"
+                        href="http://connect.qq.com/widget/shareqq/index.html?url=https://tangh.github.io/articles/efficientnet-and-efficientdet/&amp;title=EfficientNet 和 EfficientDet"
+                        aria-label="Share on QQ"
+                    >
+                        <i class="fab fa-qq" aria-hidden="true"></i><span>Share on QQ</span>
+                    </a>
+                </li>
+            
+        </ul>
+    </div>
+
+
+            
+        </div>
+        
+
+
+    
+        
+    
+
+<div id="about">
+    <div id="about-card">
+        <div id="about-btn-close">
+            <i class="fa fa-times"></i>
+        </div>
+        
+            <img id="about-card-picture" src="/assets/images/icon.jpg" alt="Author&#39;s picture"/>
+        
+            <h4 id="about-card-name">Tang Huan</h4>
+        
+            <div id="about-card-bio"></div>
+        
+        
+            <div id="about-card-job">
+                <i class="fa fa-briefcase"></i>
+                <br/>
+                
+            </div>
+        
+        
+            <div id="about-card-location">
+                <i class="fa fa-map-marker-alt"></i>
+                <br/>
+                Shanghai
+            </div>
+        
+    </div>
+</div>
+
+        
+        
+<div id="cover" style="background-image:url('/assets/images/cover.jpg');"></div>
+        
+
+<!--SCRIPTS-->
+
+<script src="/assets/js/script-21vlobaq8sfmdbypn0z91hl6jyot6shixuux8ijser2jcbktmikbwlb6yvjx.min.js"></script>
+
+<!--SCRIPTS END-->
+
+
+    
+      <script type="text/javascript">
+        (function() {
+          function render() {
+            new Gitalk({
+              clientID: 'b7b365f41dbbfaaf9b88',
+              clientSecret: '25de272b8030e3c498dd56b883e4386d881b6d62',
+              repo: 'tangh.github.io',
+              owner: 'tangh',
+              admin: ['tangh'],
+              id: 'articles/efficientnet-and-efficientdet',
+              title: document.title.replace(' - 雨天等放晴', ''),
+              ...{"language":"en","perPage":10,"distractionFreeMode":false,"enableHotKey":true,"pagerDirection":"first","createIssueManually":true}
+            }).render('gitalk');
+          }
+          var gc = document.createElement('script');
+          gc.type = 'text/javascript';
+          gc.src = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js';
+          gc.charset = 'UTF-8';
+          gc.onload = render;
+          gc.async = true;
+          document.querySelector('body').appendChild(gc);
+          var gcs = document.createElement('link');
+          gcs.href = '//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.css';
+          gcs.type = 'text/css';
+          gcs.rel = 'stylesheet';
+          gcs.media = 'screen,print';
+          document.querySelector('head').appendChild(gcs);
+        })();
+      </script>
+    
+
+
+
+
+    <script>!function(e){var c=Array.prototype.slice.call(document.querySelectorAll("img[data-original]"));function i(){for(var r=0;r<c.length;r++)t=c[r],(n=t.getBoundingClientRect()).top>=-n.height&&0<=n.left&&n.top<=1.5*(e.innerHeight||document.documentElement.clientHeight)&&function(){var t,n,e,i,o=c[r];t=o,n=function(){c=c.filter(function(t){return o!==t})},e=new Image,i=t.getAttribute("data-original"),e.onload=function(){t.src=i,n&&n()},e.src=i}();var t,n}i(),e.addEventListener("scroll",function(){var t,n;t=i,n=e,clearTimeout(t.tId),t.tId=setTimeout(function(){t.call(n)},500)})}(this);</script><!-- hexo-inject:begin --><!-- Begin: Injected MathJax -->
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Config("");
+</script>
+
+<script type="text/x-mathjax-config">
+  MathJax.Hub.Queue(function() {
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i=0; i < all.length; i += 1) {
+      all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+  });
+</script>
+
+<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
+</script>
+<!-- End: Injected MathJax -->
+<!-- hexo-inject:end --></body>
+</html>
