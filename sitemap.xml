@@ -2,6 +2,13 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   
   <url>
+    <loc>https://tangh.github.io/articles/linux-cv-development-env-configuration/</loc>
+    
+    <lastmod>2022-03-15T09:46:36.078Z</lastmod>
+    
+  </url>
+  
+  <url>
     <loc>https://tangh.github.io/articles/python-processes-threads-and-http/</loc>
     
     <lastmod>2021-09-11T09:40:22.330Z</lastmod>
@@ -17,13 +24,6 @@
   
   <url>
     <loc>https://tangh.github.io/articles/multi-gpu-and-mix-precision-in-pytorch/</loc>
-    
-    <lastmod>2021-09-11T09:34:51.127Z</lastmod>
-    
-  </url>
-  
-  <url>
-    <loc>https://tangh.github.io/articles/linux-cv-development-env-configuration/</loc>
     
     <lastmod>2021-09-11T09:34:51.127Z</lastmod>
     
