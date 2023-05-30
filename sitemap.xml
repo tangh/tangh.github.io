@@ -2,150 +2,462 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   
   <url>
-    <loc>https://tangh.github.io/articles/frequently-used-built-in-loss-functions/</loc>
-    
-    <lastmod>2022-03-17T16:45:35.397Z</lastmod>
-    
-  </url>
-  
-  <url>
-    <loc>https://tangh.github.io/articles/linux-cv-development-env-configuration/</loc>
-    
-    <lastmod>2022-03-15T09:46:36.078Z</lastmod>
-    
-  </url>
-  
-  <url>
-    <loc>https://tangh.github.io/articles/python-processes-threads-and-http/</loc>
-    
-    <lastmod>2021-09-11T09:40:22.330Z</lastmod>
-    
-  </url>
-  
-  <url>
-    <loc>https://tangh.github.io/articles/multi-gpu-and-mix-precision-in-pytorch/</loc>
-    
-    <lastmod>2021-09-11T09:34:51.127Z</lastmod>
-    
-  </url>
-  
-  <url>
-    <loc>https://tangh.github.io/articles/build-model-and-dataset-in-pytorch/</loc>
-    
-    <lastmod>2021-09-11T09:34:51.126Z</lastmod>
-    
-  </url>
-  
-  <url>
-    <loc>https://tangh.github.io/all-categories/</loc>
-    
-    <lastmod>2021-05-23T17:28:51.055Z</lastmod>
-    
-  </url>
-  
-  <url>
-    <loc>https://tangh.github.io/all-tags/</loc>
-    
-    <lastmod>2021-05-23T17:28:51.055Z</lastmod>
-    
-  </url>
-  
-  <url>
-    <loc>https://tangh.github.io/all-archives/</loc>
-    
-    <lastmod>2021-05-23T17:28:51.055Z</lastmod>
-    
-  </url>
-  
-  <url>
-    <loc>https://tangh.github.io/about/</loc>
-    
-    <lastmod>2021-05-23T17:28:51.054Z</lastmod>
-    
-  </url>
-  
-  <url>
-    <loc>https://tangh.github.io/articles/yolo-from-v1-to-v4/</loc>
-    
-    <lastmod>2021-05-23T17:28:51.054Z</lastmod>
-    
-  </url>
-  
-  <url>
     <loc>https://tangh.github.io/articles/improvements-of-regressor-in-detector/</loc>
     
-    <lastmod>2021-05-23T17:28:51.053Z</lastmod>
+    <lastmod>2023-05-28</lastmod>
     
-  </url>
-  
-  <url>
-    <loc>https://tangh.github.io/posts/simple-thoughts-on-chinese-characters/</loc>
-    
-    <lastmod>2021-05-23T17:28:51.052Z</lastmod>
-    
-  </url>
-  
-  <url>
-    <loc>https://tangh.github.io/articles/backward-in-convolutional-neural-networks/</loc>
-    
-    <lastmod>2021-05-23T17:28:51.052Z</lastmod>
-    
-  </url>
-  
-  <url>
-    <loc>https://tangh.github.io/articles/create-high-quality-live-photos/</loc>
-    
-    <lastmod>2021-05-23T17:28:51.052Z</lastmod>
-    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
   </url>
   
   <url>
     <loc>https://tangh.github.io/articles/efficientnet-and-efficientdet/</loc>
     
-    <lastmod>2021-05-23T17:28:51.052Z</lastmod>
+    <lastmod>2023-05-28</lastmod>
     
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/articles/yolo-from-v1-to-v4/</loc>
+    
+    <lastmod>2023-05-28</lastmod>
+    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/articles/backward-in-convolutional-neural-networks/</loc>
+    
+    <lastmod>2023-05-28</lastmod>
+    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/articles/frequently-used-built-in-loss-functions/</loc>
+    
+    <lastmod>2023-05-28</lastmod>
+    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
   </url>
   
   <url>
     <loc>https://tangh.github.io/articles/hexo-with-github-pages-static-site/</loc>
     
-    <lastmod>2021-05-23T17:28:51.051Z</lastmod>
+    <lastmod>2023-05-28</lastmod>
     
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
   </url>
   
   <url>
     <loc>https://tangh.github.io/articles/coco-and-cityscapes-datasets/</loc>
     
-    <lastmod>2021-05-23T17:28:51.051Z</lastmod>
+    <lastmod>2023-05-23</lastmod>
     
-  </url>
-  
-  <url>
-    <loc>https://tangh.github.io/articles/icip-in-taiwan-sees-and-hears/</loc>
-    
-    <lastmod>2021-05-23T17:28:51.051Z</lastmod>
-    
-  </url>
-  
-  <url>
-    <loc>https://tangh.github.io/articles/western-united-states/</loc>
-    
-    <lastmod>2021-05-23T17:28:51.050Z</lastmod>
-    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
   </url>
   
   <url>
     <loc>https://tangh.github.io/articles/hajimemashite-fujisan/</loc>
     
-    <lastmod>2021-05-23T17:28:51.050Z</lastmod>
+    <lastmod>2023-05-23</lastmod>
     
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/articles/western-united-states/</loc>
+    
+    <lastmod>2023-05-23</lastmod>
+    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/articles/icip-in-taiwan-sees-and-hears/</loc>
+    
+    <lastmod>2023-05-23</lastmod>
+    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/posts/simple-thoughts-on-chinese-characters/</loc>
+    
+    <lastmod>2023-05-23</lastmod>
+    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/articles/create-high-quality-live-photos/</loc>
+    
+    <lastmod>2023-05-23</lastmod>
+    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/articles/linux-cv-development-env-configuration/</loc>
+    
+    <lastmod>2023-05-23</lastmod>
+    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/articles/multi-gpu-and-mix-precision-in-pytorch/</loc>
+    
+    <lastmod>2023-05-23</lastmod>
+    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/articles/build-model-and-dataset-in-pytorch/</loc>
+    
+    <lastmod>2023-05-23</lastmod>
+    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/articles/python-processes-threads-and-http/</loc>
+    
+    <lastmod>2023-05-23</lastmod>
+    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
   </url>
   
   <url>
     <loc>https://tangh.github.io/articles/index-in-numpy-and-pytorch/</loc>
     
-    <lastmod>2021-05-23T17:28:51.050Z</lastmod>
+    <lastmod>2023-05-23</lastmod>
     
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/about/</loc>
+    
+    <lastmod>2023-05-17</lastmod>
+    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/all-categories/</loc>
+    
+    <lastmod>2023-05-17</lastmod>
+    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/all-tags/</loc>
+    
+    <lastmod>2023-05-17</lastmod>
+    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/all-archives/</loc>
+    
+    <lastmod>2023-05-17</lastmod>
+    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+
+  <url>
+    <loc>https://tangh.github.io/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+  </url>
+
+  
+  <url>
+    <loc>https://tangh.github.io/tags/United-States/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/Japan/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/Python/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/Numpy/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/PyTorch/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/Hexo/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/GitHub-Pages/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/Amazon-S3/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/COCO/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/CityScapes/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/Computer-Vision/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/Deep-Learning/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/Datasets/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/Taiwan/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/Backpropagation/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/Chinese-Characters/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/Blog-Posts/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/Live-Photos/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/Google-Photos/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/Object-Detection/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/Linux/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/About/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/tags/Flask/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+
+  
+  <url>
+    <loc>https://tangh.github.io/categories/Travel/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/categories/Computer-Science/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/categories/Computer/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/categories/Travel/United-States/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/categories/Travel/Taiwan-HongKong-Macau/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/categories/Travel/Japan/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/categories/Computer-Science/Deep-Learning/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/categories/Computer-Science/Python/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/categories/Culture/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/categories/Computer/Software/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/categories/Computer/Web/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/categories/Computer/Programming/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/categories/About/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
+  </url>
+  
+  <url>
+    <loc>https://tangh.github.io/categories/Culture/Languages-and-Characters/</loc>
+    <lastmod>2023-05-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.2</priority>
   </url>
   
 </urlset>

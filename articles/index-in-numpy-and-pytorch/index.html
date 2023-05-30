@@ -5,7 +5,7 @@
 
     
 <head>
-    <!-- hexo-inject:begin --><!-- hexo-inject:end --><meta charset="UTF-8">
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="generator" content="雨天等放晴">
     <title>Numpy 和 PyTorch 中的索引 - 雨天等放晴</title>
@@ -20,21 +20,20 @@
         <link rel="apple-touch-icon" sizes="180x180" href="https://tangh.github.io/assets/images/apple-touch-icon.png">
     
     
-    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg"},"articleBody":"\n\n\n\n使用整型 list/array/tensor 进行索引索引类型可以是 int list、int_? ndarray（任意 numpy int 类型）、long torch.tensor (int64)。大多数函数返回的都是这种类型，例如 torch.topk()、np.where() 等。\n\n基本使用，单个数组的 index：返回一个跟 index 形状相同的数组，从 a 的 first dim 上取对应位置的数据\n\n12345678&gt;&gt;&gt; a = torch.arange(9) ** 2&gt;&gt;&gt; a    tensor([ 0,  1,  4,  9, 16, 25, 36, 49, 64])&gt;&gt;&gt; index = torch.tensor([1,3,1,5,8], dtype=torch.long)&gt;&gt;&gt; index    tensor([1, 3, 1, 5, 8])&gt;&gt;&gt; a[index]    tensor([ 1,  9,  1, 25, 64])\n\n索引数组中可以有重复值\n\n上述情况下 a.dim() != index.dim() 时同理，只要求 max(index) &lt;= len(a)\n\n12345678910111213141516&gt;&gt;&gt; index = torch.tensor([[8,1], [2,1]], dtype=torch.long)&gt;&gt;&gt; index    tensor([[8, 1],            [2, 1]])&gt;&gt;&gt; a[index]    tensor([[64,  1],            [ 4,  1]])&gt;&gt;&gt; a = a.view(3, 3)&gt;&gt;&gt; index = torch.tensor([2,0])&gt;&gt;&gt; a[index]    tensor([[6, 7, 8],            [0, 1, 2]])&gt;&gt;&gt; index = torch.tensor([5,0])&gt;&gt;&gt; a[index]    RuntimeError: \"index 5 is out of bounds for dim with size 3\"\n\n\n多个数组的索引\n\n12345678910&gt;&gt;&gt; a = torch.arange(12).view(3,4)&gt;&gt;&gt; a    tensor([[ 0,  1,  2,  3],            [ 4,  5,  6,  7],            [ 8,  9, 10, 11]])&gt;&gt;&gt; i = torch.tensor([[0,1], [1,2]])&gt;&gt;&gt; j = torch.tensor([[2,1], [3,3]])&gt;&gt;&gt; a[i, j]    tensor([[ 2,  5],            [ 7, 11]])\n\na[i,j] 的机制是数组 i 和数组 j 相同位置的对应数字两两组成一对索引，然后用这对索引在 a 中进行取值。比如 i[0,0] == 0, j[0,0] == 2，它们组成的索引对是 (0,2)，在数组 a 中对应的值 a[0,2] == 2。\n\n上述情况下，i.shape != j.shape 时，会先进行 broadcast\n\n1234&gt;&gt;&gt; j = torch.tensor([2,1])&gt;&gt;&gt; a[i,j]    tensor([[2, 5],            [6, 9]])\n\nshape 较小的先 broadcast 到较大的 shape，j -&gt; [[2,1], [2,1]]。具体可参考 PYTORCH BROADCASTING SEMANTICS。\n\n    \n        i        \n        j        \n        index        \n    \n    \n        0\n        1\n        2\n        1\n        [0, 2]\n        [1, 1]\n    \n    \n        1\n        2\n        2\n        1\n        [1, 2]\n        [1, 1]\n    \n\n\n\n切片\n\n123456&gt;&gt;&gt; a = torch.arange(12).view(3,4)&gt;&gt;&gt; a    tensor([[ 0,  1,  2,  3],            [ 4,  5,  6,  7],            [ 8,  9, 10, 11]])&gt;&gt;&gt; i = torch.tensor([[0,1], [1,2]])\n\n如 result = a[i, :] 则是在 i.shape = (2, 2) 的 2×2 数组的每个位置内，放入 i 相同位置的元素在 a 中索引出的值（a 的行 i 的所有列元素 :），结果 result.shape = (2, 2, 4)。\n\n赋值（In-place）\n\n如果索引列表有重复值，赋值的话也会多次赋值，以最后一次赋值为准。但如果使用 Python 的 += 运算，只会自增一次。\n12345678&gt;&gt;&gt; a = torch.arange(5)&gt;&gt;&gt; a[[0,0,2]] = torch.tensor([1,2,3])&gt;&gt;&gt; a    tensor([2, 1, 3, 3, 4])&gt;&gt;&gt; a[[0,0,2]] += 1&gt;&gt;&gt; a    tensor([3, 1, 4, 3, 4])\n\n\n\n使用布尔 list/array/tensor 进行索引索引类型可以是 bool list、bool np.array、byte torch.tensor（uint8）。&gt;、== 等操作返回的是这种类型。\n比较简单，如果是 True/1 就表示选中，False/0 表示不选中。\n12345&gt;&gt;&gt; a = np.arange(12).reshape(3,4)&gt;&gt;&gt; index = np.array([False,True,True])&gt;&gt;&gt; a[index, :]    array([[ 4,  5,  6,  7],           [ 8,  9, 10, 11]])","dateCreated":"2018-07-26T00:00:00+08:00","dateModified":"2021-05-24T01:28:51+08:00","datePublished":"2018-07-26T00:00:00+08:00","description":"Numpy 和 PyTorch 中的各种索引操作的过程和结果。","headline":"Numpy 和 PyTorch 中的索引","image":[],"mainEntityOfPage":{"@type":"WebPage","@id":"https://tangh.github.io/articles/index-in-numpy-and-pytorch/"},"publisher":{"@type":"Organization","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg","logo":{"@type":"ImageObject","url":"icon.jpg"}},"url":"https://tangh.github.io/articles/index-in-numpy-and-pytorch/","keywords":"Python, Numpy, PyTorch"}</script>
+    <script type="application/ld+json">{"@context":"http://schema.org","@type":"BlogPosting","author":{"@type":"Person","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg"},"articleBody":"\n\n\n\n使用整型 list&#x2F;array&#x2F;tensor 进行索引索引类型可以是 int list、int_? ndarray（任意 numpy int 类型）、long torch.tensor (int64)。大多数函数返回的都是这种类型，例如 torch.topk()、np.where() 等。\n\n基本使用，单个数组的 index：返回一个跟 index 形状相同的数组，从 a 的 first dim 上取对应位置的数据\n\n12345678&gt;&gt;&gt; a = torch.arange(9) ** 2&gt;&gt;&gt; a    tensor([ 0,  1,  4,  9, 16, 25, 36, 49, 64])&gt;&gt;&gt; index = torch.tensor([1,3,1,5,8], dtype=torch.long)&gt;&gt;&gt; index    tensor([1, 3, 1, 5, 8])&gt;&gt;&gt; a[index]    tensor([ 1,  9,  1, 25, 64])\n\n索引数组中可以有重复值\n\n上述情况下 a.dim() != index.dim() 时同理，只要求 max(index) &lt;= len(a)\n\n12345678910111213141516&gt;&gt;&gt; index = torch.tensor([[8,1], [2,1]], dtype=torch.long)&gt;&gt;&gt; index    tensor([[8, 1],            [2, 1]])&gt;&gt;&gt; a[index]    tensor([[64,  1],            [ 4,  1]])&gt;&gt;&gt; a = a.view(3, 3)&gt;&gt;&gt; index = torch.tensor([2,0])&gt;&gt;&gt; a[index]    tensor([[6, 7, 8],            [0, 1, 2]])&gt;&gt;&gt; index = torch.tensor([5,0])&gt;&gt;&gt; a[index]    RuntimeError: &quot;index 5 is out of bounds for dim with size 3&quot;\n\n\n多个数组的索引\n\n12345678910&gt;&gt;&gt; a = torch.arange(12).view(3,4)&gt;&gt;&gt; a    tensor([[ 0,  1,  2,  3],            [ 4,  5,  6,  7],            [ 8,  9, 10, 11]])&gt;&gt;&gt; i = torch.tensor([[0,1], [1,2]])&gt;&gt;&gt; j = torch.tensor([[2,1], [3,3]])&gt;&gt;&gt; a[i, j]    tensor([[ 2,  5],            [ 7, 11]])\n\na[i,j] 的机制是数组 i 和数组 j 相同位置的对应数字两两组成一对索引，然后用这对索引在 a 中进行取值。比如 i[0,0] == 0, j[0,0] == 2，它们组成的索引对是 (0,2)，在数组 a 中对应的值 a[0,2] == 2。\n\n上述情况下，i.shape != j.shape 时，会先进行 broadcast\n\n1234&gt;&gt;&gt; j = torch.tensor([2,1])&gt;&gt;&gt; a[i,j]    tensor([[2, 5],            [6, 9]])\n\nshape 较小的先 broadcast 到较大的 shape，j -&gt; [[2,1], [2,1]]。具体可参考 PYTORCH BROADCASTING SEMANTICS。\n\n    \n        i        \n        j        \n        index        \n    \n    \n        0\n        1\n        2\n        1\n        [0, 2]\n        [1, 1]\n    \n    \n        1\n        2\n        2\n        1\n        [1, 2]\n        [1, 1]\n    \n\n\n\n切片\n\n123456&gt;&gt;&gt; a = torch.arange(12).view(3,4)&gt;&gt;&gt; a    tensor([[ 0,  1,  2,  3],            [ 4,  5,  6,  7],            [ 8,  9, 10, 11]])&gt;&gt;&gt; i = torch.tensor([[0,1], [1,2]])\n\n如 result = a[i, :] 则是在 i.shape = (2, 2) 的 2×2 数组的每个位置内，放入 i 相同位置的元素在 a 中索引出的值（a 的行 i 的所有列元素 :），结果 result.shape = (2, 2, 4)。\n\n赋值（In-place）\n\n如果索引列表有重复值，赋值的话也会多次赋值，以最后一次赋值为准。但如果使用 Python 的 += 运算，只会自增一次。\n12345678&gt;&gt;&gt; a = torch.arange(5)&gt;&gt;&gt; a[[0,0,2]] = torch.tensor([1,2,3])&gt;&gt;&gt; a    tensor([2, 1, 3, 3, 4])&gt;&gt;&gt; a[[0,0,2]] += 1&gt;&gt;&gt; a    tensor([3, 1, 4, 3, 4])\n\n\n\n使用布尔 list&#x2F;array&#x2F;tensor 进行索引索引类型可以是 bool list、bool np.array、byte torch.tensor（uint8）。&gt;、== 等操作返回的是这种类型。\n比较简单，如果是 True/1 就表示选中，False/0 表示不选中。\n12345&gt;&gt;&gt; a = np.arange(12).reshape(3,4)&gt;&gt;&gt; index = np.array([False,True,True])&gt;&gt;&gt; a[index, :]    array([[ 4,  5,  6,  7],           [ 8,  9, 10, 11]])","dateCreated":"2018-07-26T00:00:00+08:00","dateModified":"2023-05-24T00:27:07+08:00","datePublished":"2018-07-26T00:00:00+08:00","description":"Numpy 和 PyTorch 中的各种索引操作的过程和结果。","headline":"Numpy 和 PyTorch 中的索引","image":[],"mainEntityOfPage":{"@type":"WebPage","@id":"https://tangh.github.io/articles/index-in-numpy-and-pytorch/"},"publisher":{"@type":"Organization","name":"Tang Huan","sameAs":["https://twitter.com/tanghrtx/","https://www.flickr.com/photos/135277712@N07/","https://www.instagram.com/tanghrtx/","https://www.youtube.com/channel/UCO-I0MZR6-HYmI_tgbBc0yw/","https://space.bilibili.com/634428/"],"image":"icon.jpg","logo":{"@type":"ImageObject","url":"icon.jpg"}},"url":"https://tangh.github.io/articles/index-in-numpy-and-pytorch/","keywords":"Python, Numpy, PyTorch"}</script>
     <meta name="description" content="Numpy 和 PyTorch 中的各种索引操作的过程和结果。">
 <meta property="og:type" content="blog">
 <meta property="og:title" content="Numpy 和 PyTorch 中的索引">
-<meta property="og:url" content="https:&#x2F;&#x2F;tangh.github.io&#x2F;articles&#x2F;index-in-numpy-and-pytorch&#x2F;">
+<meta property="og:url" content="https://tangh.github.io/articles/index-in-numpy-and-pytorch/">
 <meta property="og:site_name" content="雨天等放晴">
 <meta property="og:description" content="Numpy 和 PyTorch 中的各种索引操作的过程和结果。">
 <meta property="og:locale" content="en_US">
 <meta property="article:published_time" content="2018-07-25T16:00:00.000Z">
-<meta property="article:modified_time" content="2021-05-23T17:28:51.050Z">
+<meta property="article:modified_time" content="2023-05-23T16:27:07.568Z">
 <meta property="article:author" content="Tang Huan">
+<meta property="article:tag" content="Python">
 <meta property="article:tag" content="Numpy">
 <meta property="article:tag" content="PyTorch">
-<meta property="article:tag" content="Index">
-<meta property="article:tag" content="Python">
 <meta name="twitter:card" content="summary">
     
     
@@ -60,15 +59,19 @@
         gtag('js', new Date());
 
         gtag('config', 'UA-137837052-1');
-    </script><!-- hexo-inject:begin --><!-- hexo-inject:end -->
+    </script>
 
 
     
 
-</head>
+<!-- hexo injector head_end start -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.12.0/dist/katex.min.css">
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/hexo-math@4.0.0/dist/style.css">
+<!-- hexo injector head_end end --></head>
 
     <body>
-        <!-- hexo-inject:begin --><!-- hexo-inject:end --><div id="blog">
+        <div id="blog">
             <!-- Define author's picture -->
 
 
@@ -332,7 +335,7 @@
 
 
 
-<h1 id="使用整型-list-array-tensor-进行索引"><a href="#使用整型-list-array-tensor-进行索引" class="headerlink" title="使用整型 list/array/tensor 进行索引"></a>使用整型 list/array/tensor 进行索引</h1><p>索引类型可以是 <code>int list</code>、<code>int_? ndarray</code>（任意 <code>numpy int</code> 类型）、<code>long torch.tensor (int64)</code>。大多数函数返回的都是这种类型，例如 <code>torch.topk()</code>、<code>np.where()</code> 等。</p>
+<h1 id="使用整型-list-x2F-array-x2F-tensor-进行索引"><a href="#使用整型-list-x2F-array-x2F-tensor-进行索引" class="headerlink" title="使用整型 list&#x2F;array&#x2F;tensor 进行索引"></a>使用整型 list&#x2F;array&#x2F;tensor 进行索引</h1><p>索引类型可以是 <code>int list</code>、<code>int_? ndarray</code>（任意 <code>numpy int</code> 类型）、<code>long torch.tensor (int64)</code>。大多数函数返回的都是这种类型，例如 <code>torch.topk()</code>、<code>np.where()</code> 等。</p>
 <ol>
 <li>基本使用，单个数组的 index：返回一个跟 index 形状相同的数组，从 a 的 first dim 上取对应位置的数据</li>
 </ol>
@@ -342,7 +345,7 @@
 <ol start="2">
 <li>上述情况下 <code>a.dim() != index.dim()</code> 时同理，只要求 <code>max(index) &lt;= len(a)</code></li>
 </ol>
-<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">&gt;&gt;&gt; </span>index = torch.tensor([[<span class="number">8</span>,<span class="number">1</span>], [<span class="number">2</span>,<span class="number">1</span>]], dtype=torch.long)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>index</span><br><span class="line">    tensor([[<span class="number">8</span>, <span class="number">1</span>],</span><br><span class="line">            [<span class="number">2</span>, <span class="number">1</span>]])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a[index]</span><br><span class="line">    tensor([[<span class="number">64</span>,  <span class="number">1</span>],</span><br><span class="line">            [ <span class="number">4</span>,  <span class="number">1</span>]])</span><br><span class="line"></span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a = a.view(<span class="number">3</span>, <span class="number">3</span>)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>index = torch.tensor([<span class="number">2</span>,<span class="number">0</span>])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a[index]</span><br><span class="line">    tensor([[<span class="number">6</span>, <span class="number">7</span>, <span class="number">8</span>],</span><br><span class="line">            [<span class="number">0</span>, <span class="number">1</span>, <span class="number">2</span>]])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>index = torch.tensor([<span class="number">5</span>,<span class="number">0</span>])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a[index]</span><br><span class="line">    RuntimeError: <span class="string">"index 5 is out of bounds for dim with size 3"</span></span><br></pre></td></tr></table></figure>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">&gt;&gt;&gt; </span>index = torch.tensor([[<span class="number">8</span>,<span class="number">1</span>], [<span class="number">2</span>,<span class="number">1</span>]], dtype=torch.long)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>index</span><br><span class="line">    tensor([[<span class="number">8</span>, <span class="number">1</span>],</span><br><span class="line">            [<span class="number">2</span>, <span class="number">1</span>]])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a[index]</span><br><span class="line">    tensor([[<span class="number">64</span>,  <span class="number">1</span>],</span><br><span class="line">            [ <span class="number">4</span>,  <span class="number">1</span>]])</span><br><span class="line"></span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a = a.view(<span class="number">3</span>, <span class="number">3</span>)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>index = torch.tensor([<span class="number">2</span>,<span class="number">0</span>])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a[index]</span><br><span class="line">    tensor([[<span class="number">6</span>, <span class="number">7</span>, <span class="number">8</span>],</span><br><span class="line">            [<span class="number">0</span>, <span class="number">1</span>, <span class="number">2</span>]])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>index = torch.tensor([<span class="number">5</span>,<span class="number">0</span>])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a[index]</span><br><span class="line">    RuntimeError: <span class="string">&quot;index 5 is out of bounds for dim with size 3&quot;</span></span><br></pre></td></tr></table></figure>
 
 <ol start="3">
 <li>多个数组的索引</li>
@@ -355,7 +358,7 @@
 </ol>
 <figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">&gt;&gt;&gt; </span>j = torch.tensor([<span class="number">2</span>,<span class="number">1</span>])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a[i,j]</span><br><span class="line">    tensor([[<span class="number">2</span>, <span class="number">5</span>],</span><br><span class="line">            [<span class="number">6</span>, <span class="number">9</span>]])</span><br></pre></td></tr></table></figure>
 
-<p>shape 较小的先 broadcast 到较大的 shape，<code>j -&gt; [[2,1], [2,1]]</code>。具体可参考 <a href="https://pytorch.org/docs/stable/notes/broadcasting.html" target="_blank" rel="noopener">PYTORCH BROADCASTING SEMANTICS</a>。</p>
+<p>shape 较小的先 broadcast 到较大的 shape，<code>j -&gt; [[2,1], [2,1]]</code>。具体可参考 <a target="_blank" rel="noopener" href="https://pytorch.org/docs/stable/notes/broadcasting.html">PYTORCH BROADCASTING SEMANTICS</a>。</p>
 <table border="1" style="text-align:center;">
     <tr>
         <th colspan="2">i</th>        
@@ -394,7 +397,7 @@
 
 
 
-<h1 id="使用布尔-list-array-tensor-进行索引"><a href="#使用布尔-list-array-tensor-进行索引" class="headerlink" title="使用布尔 list/array/tensor 进行索引"></a>使用布尔 list/array/tensor 进行索引</h1><p>索引类型可以是 bool list、bool np.array、byte torch.tensor（uint8）。<code>&gt;</code>、<code>==</code> 等操作返回的是这种类型。</p>
+<h1 id="使用布尔-list-x2F-array-x2F-tensor-进行索引"><a href="#使用布尔-list-x2F-array-x2F-tensor-进行索引" class="headerlink" title="使用布尔 list&#x2F;array&#x2F;tensor 进行索引"></a>使用布尔 list&#x2F;array&#x2F;tensor 进行索引</h1><p>索引类型可以是 bool list、bool np.array、byte torch.tensor（uint8）。<code>&gt;</code>、<code>==</code> 等操作返回的是这种类型。</p>
 <p>比较简单，如果是 <code>True/1</code> 就表示选中，<code>False/0</code> 表示不选中。</p>
 <figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">&gt;&gt;&gt; </span>a = np.arange(<span class="number">12</span>).reshape(<span class="number">3</span>,<span class="number">4</span>)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>index = np.array([<span class="literal">False</span>,<span class="literal">True</span>,<span class="literal">True</span>])</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>a[index, :]</span><br><span class="line">    array([[ <span class="number">4</span>,  <span class="number">5</span>,  <span class="number">6</span>,  <span class="number">7</span>],</span><br><span class="line">           [ <span class="number">8</span>,  <span class="number">9</span>, <span class="number">10</span>, <span class="number">11</span>]])</span><br></pre></td></tr></table></figure>
             
@@ -407,7 +410,7 @@
             <div class="post-footer-tags">
                 <span class="text-color-light text-small">TAGGED IN</span><br/>
                 
-    <a class="tag tag--primary tag--small t-link" href="/tags/Numpy/" rel="tag">Numpy</a> <a class="tag tag--primary tag--small t-link" href="/tags/PyTorch/" rel="tag">PyTorch</a> <a class="tag tag--primary tag--small t-link" href="/tags/Python/" rel="tag">Python</a>
+    <a class="tag tag--primary tag--small t-none-link" href="/tags/Numpy/" rel="tag">Numpy</a> <a class="tag tag--primary tag--small t-none-link" href="/tags/PyTorch/" rel="tag">PyTorch</a> <a class="tag tag--primary tag--small t-none-link" href="/tags/Python/" rel="tag">Python</a>
 
             </div>
         
@@ -546,7 +549,7 @@
 
                 <footer id="footer" class="main-content-wrap">
     <span class="copyrights">
-        Copyrights &copy; 2022 Tang Huan. All Rights Reserved.
+        Copyrights &copy; 2023 Tang Huan. All Rights Reserved.
     </span>
 </footer>
 
@@ -724,5 +727,18 @@
 
 
 
-    <script>!function(e){var c=Array.prototype.slice.call(document.querySelectorAll("img[data-original]"));function i(){for(var r=0;r<c.length;r++)t=c[r],(n=t.getBoundingClientRect()).top>=-n.height&&0<=n.left&&n.top<=1.5*(e.innerHeight||document.documentElement.clientHeight)&&function(){var t,n,e,i,o=c[r];t=o,n=function(){c=c.filter(function(t){return o!==t})},e=new Image,i=t.getAttribute("data-original"),e.onload=function(){t.src=i,n&&n()},e.src=i}();var t,n}i(),e.addEventListener("scroll",function(){var t,n;t=i,n=e,clearTimeout(t.tId),t.tId=setTimeout(function(){t.call(n)},500)})}(this);</script><!-- hexo-inject:begin --><!-- hexo-inject:end --></body>
+    
+        <style>
+            [bg-lazy] {
+                background-image: none !important;
+                background-color: #eee !important;
+            }
+        </style>
+        <script>
+            window.imageLazyLoadSetting = {
+                isSPA: false,
+                preloadRatio: 2,
+                processImages: null,
+            };
+        </script><script>window.addEventListener("load",function(){var t=/\.(gif|jpg|jpeg|tiff|png)$/i,r=/^data:image\/[a-z]+;base64,/;Array.prototype.slice.call(document.querySelectorAll("img[data-original]")).forEach(function(a){var e=a.parentNode;"A"===e.tagName&&(e.href.match(t)||e.href.match(r))&&(e.href=a.dataset.original)})});</script><script>!function(r){r.imageLazyLoadSetting.processImages=t;var e=r.imageLazyLoadSetting.isSPA,n=r.imageLazyLoadSetting.preloadRatio||1,c=a();function a(){var t=Array.prototype.slice.call(document.querySelectorAll("img[data-original]")),e=Array.prototype.slice.call(document.querySelectorAll("[bg-lazy]"));return t.concat(e)}function t(){e&&(c=a());for(var t,o=0;o<c.length;o++)0<=(t=(t=c[o]).getBoundingClientRect()).bottom&&0<=t.left&&t.top<=(r.innerHeight*n||document.documentElement.clientHeight*n)&&function(){var t,e,n,a,i=c[o];e=function(){c=c.filter(function(t){return i!==t}),r.imageLazyLoadSetting.onImageLoaded&&r.imageLazyLoadSetting.onImageLoaded(i)},(t=i).hasAttribute("bg-lazy")?(t.removeAttribute("bg-lazy"),e&&e()):(n=new Image,a=t.getAttribute("data-original"),n.onload=function(){t.src=a,t.removeAttribute("data-original"),e&&e()},t.src!==a&&(n.src=a))}()}function i(){clearTimeout(t.tId),t.tId=setTimeout(t,500)}t(),document.addEventListener("scroll",i),r.addEventListener("resize",i),r.addEventListener("orientationchange",i)}(this);</script></body>
 </html>
